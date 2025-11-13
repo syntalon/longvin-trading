@@ -1,0 +1,21 @@
+# Maven & build output
+/target/
+**/target/
+*.log
+
+# QuickFIX/J runtime artifacts
+/backend/quickfix/
+
+# OS / IDE metadata
+.DS_Store
+.idea/
+*.iml
+
+# Node & Angular artifacts
+/ui/node/
+/ui/node_modules/
+/ui/dist/
+/ui/.angular/
+npm-debug.log*
+package-lock.json
+
