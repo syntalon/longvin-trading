@@ -55,8 +55,9 @@ Then open <http://localhost:8080> to view the Angular UI.
 
 ## FIX Integration Scaffolding
 
-- The backend ships with QuickFIX/J 2.3.1 dependencies and a lifecycle-managed initiator that starts automatically when `trading.fix.enabled=true`.
-- Default configuration lives in `backend/src/main/resources/fix/das-mirror-trading.cfg`; update host, ports, and credentials (`SenderCompID`, `TargetCompID`) with values from DAS Trader Pro.
-- Configure the primary DAS account and one or more secondary (shadow) accounts in `backend/src/main/resources/application.properties` by adjusting `trading.fix.primary-session`, `trading.fix.shadow-sessions`, and optional per-session account overrides under `trading.fix.shadow-accounts.*`.
-- NewOrderSingle messages received from the primary session are mirrored in real time to each logged-on shadow session. Mirrored orders receive a generated `ClOrdID` prefixed by `trading.fix.cl-ord-id-prefix` and can optionally override the `Account(1)` tag per shadow session.
-- Extend `MirrorTradingApplication` to support cancels, replaces, or additional business logic as your mirror-trading workflow evolves.
+- The backend ships with QuickFIX/J 2.3.1 dependencies. When `trading.fix.enabled=true`, `FixSessionManager` starts **both** a drop-copy acceptor (listens for DAS to connect) and one or more order-entry initiator sessions (the app connects out to DAS to place child account orders).
+- The combined FIX settings live in `backend/src/main/resources/fix/das-mirror-trading.cfg`. The `[SESSION]` block with `ConnectionType=acceptor` defines the listening port/IDs for the drop-copy feed (`SocketAcceptPort`, `SenderCompID`, `TargetCompID`). Additional `[SESSION]` entries with `ConnectionType=initiator` define each child order-entry session (`SocketConnectHost`, `SocketConnectPort`, etc.). Update these per the credentials DAS provides.
+- Configure the primary DAS account and the list of shadow (child) sessions in `backend/src/main/resources/application.properties` by adjusting `trading.fix.primary-session`, `trading.fix.primary-account`, `trading.fix.shadow-sessions`, and optional per-session overrides under `trading.fix.shadow-accounts.*`.
+- Execution reports received on the drop-copy acceptor drive the `MirrorTradingApplication`. When `ExecType=New`, the backend synthesizes a mirror `NewOrderSingle` for each logged-on shadow session; when `ExecType=Replaced` or `ExecType=Canceled`, the service issues the corresponding `OrderCancelReplaceRequest`/`OrderCancelRequest` to keep secondary accounts synchronized.
+- Mirrored orders inherit pricing, stop levels, and time-in-force from the drop-copy feed. Use `trading.fix.cl-ord-id-prefix` to control the generated `ClOrdID` prefix and per-session account overrides to route child orders correctly.
+- Extend `MirrorTradingApplication` to support additional execution types or downstream processing (e.g., persistence, analytics) as your mirror-trading workflow evolves.

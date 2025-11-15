@@ -2,8 +2,10 @@ package com.longvin.trading.fix;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Iterator;
 import java.util.Objects;
 import java.util.Spliterators;
+import java.util.Properties;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
@@ -19,6 +21,7 @@ import org.springframework.stereotype.Component;
 
 import quickfix.ConfigError;
 import quickfix.DefaultMessageFactory;
+import quickfix.Dictionary;
 import quickfix.LogFactory;
 import quickfix.MemoryStoreFactory;
 import quickfix.MessageFactory;
@@ -27,6 +30,7 @@ import quickfix.RuntimeError;
 import quickfix.SessionID;
 import quickfix.SessionSettings;
 import quickfix.SLF4JLogFactory;
+import quickfix.SocketAcceptor;
 import quickfix.SocketInitiator;
 
 @Component
@@ -40,6 +44,7 @@ public class FixSessionManager implements SmartLifecycle {
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private SocketInitiator initiator;
+    private SocketAcceptor acceptor;
 
     public FixSessionManager(MirrorTradingApplication application,
                              FixClientProperties properties,
@@ -57,30 +62,53 @@ public class FixSessionManager implements SmartLifecycle {
         }
         if (running.compareAndSet(false, true)) {
             try {
-                SessionSettings settings = loadSettings();
-                MessageStoreFactory storeFactory = new MemoryStoreFactory();
-                LogFactory logFactory = new SLF4JLogFactory(settings);
+                SessionSettings allSettings = loadSettings();
+                SessionSettings acceptorSettings = filterSettings(allSettings, "acceptor");
+                SessionSettings initiatorSettings = filterSettings(allSettings, "initiator");
+
+                boolean startedSomething = false;
                 MessageFactory messageFactory = new DefaultMessageFactory();
-                initiator = new SocketInitiator(application, storeFactory, settings, logFactory, messageFactory);
-                initiator.start();
-                String configuredSessions = StreamSupport.stream(
-                                Spliterators.spliteratorUnknownSize(settings.sectionIterator(), 0), false)
-                        .map(SessionID::toString)
-                        .collect(Collectors.joining(", "));
-                log.info("FIX initiator started. Primary session={}, shadows={}, configured sessions={}",
-                        properties.getPrimarySession(), properties.getShadowSessions(), configuredSessions);
+
+                if (hasSessions(acceptorSettings)) {
+                    MessageStoreFactory storeFactory = new MemoryStoreFactory();
+                    LogFactory logFactory = new SLF4JLogFactory(acceptorSettings);
+                    acceptor = new SocketAcceptor(application, storeFactory, acceptorSettings, logFactory, messageFactory);
+                    acceptor.start();
+                    startedSomething = true;
+                    log.info("FIX acceptor started for drop-copy sessions: {}", describeSessions(acceptorSettings));
+                }
+
+                if (hasSessions(initiatorSettings)) {
+                    MessageStoreFactory storeFactory = new MemoryStoreFactory();
+                    LogFactory logFactory = new SLF4JLogFactory(initiatorSettings);
+                    initiator = new SocketInitiator(application, storeFactory, initiatorSettings, logFactory, messageFactory);
+                    initiator.start();
+                    startedSomething = true;
+                    log.info("FIX initiator started. Order-entry sessions: {}", describeSessions(initiatorSettings));
+                }
+
+                if (!startedSomething) {
+                    running.set(false);
+                    log.warn("No FIX sessions configured in {}. Nothing was started.", properties.getConfigPath());
+                }
             } catch (IOException | RuntimeError | ConfigError e) {
                 running.set(false);
-                throw new IllegalStateException("Unable to start QuickFIX/J initiator", e);
+                throw new IllegalStateException("Unable to start QuickFIX/J sessions", e);
             }
         }
     }
 
     @Override
     public void stop() {
-        if (running.compareAndSet(true, false) && initiator != null) {
-            log.info("Stopping FIX initiator");
-            initiator.stop();
+        if (running.compareAndSet(true, false)) {
+            if (initiator != null) {
+                log.info("Stopping FIX initiator");
+                initiator.stop();
+            }
+            if (acceptor != null) {
+                log.info("Stopping FIX acceptor");
+                acceptor.stop();
+            }
         }
     }
 
@@ -112,5 +140,44 @@ public class FixSessionManager implements SmartLifecycle {
         try (InputStream inputStream = resource.getInputStream()) {
             return new SessionSettings(inputStream);
         }
+    }
+
+    private SessionSettings filterSettings(SessionSettings source, String connectionType) throws ConfigError {
+        SessionSettings filtered = new SessionSettings();
+        copyDefaultProperties(source, filtered);
+        Iterator<SessionID> iterator = source.sectionIterator();
+        while (iterator.hasNext()) {
+            SessionID sessionID = iterator.next();
+            Properties props = source.getSessionProperties(sessionID);
+            String type = props.getProperty("ConnectionType");
+            if (connectionType.equalsIgnoreCase(type)) {
+                filtered.set(sessionID, toDictionary(props));
+            }
+        }
+        return filtered;
+    }
+
+    private void copyDefaultProperties(SessionSettings source, SessionSettings target) throws ConfigError {
+        Properties defaults = source.getDefaultProperties();
+        if (defaults == null || defaults.isEmpty()) {
+            return;
+        }
+        target.set(toDictionary(defaults));
+    }
+
+    private Dictionary toDictionary(Properties properties) {
+        Dictionary dictionary = new Dictionary();
+        properties.forEach((key, value) -> dictionary.setString((String) key, (String) value));
+        return dictionary;
+    }
+
+    private boolean hasSessions(SessionSettings settings) {
+        return settings.sectionIterator().hasNext();
+    }
+
+    private String describeSessions(SessionSettings settings) {
+        return StreamSupport.stream(Spliterators.spliteratorUnknownSize(settings.sectionIterator(), 0), false)
+                .map(SessionID::toString)
+                .collect(Collectors.joining(", "));
     }
 }
