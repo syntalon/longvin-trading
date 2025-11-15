@@ -1,4 +1,4 @@
-package com.longvin.trading.fix;
+package com.longvin.trading.config;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;

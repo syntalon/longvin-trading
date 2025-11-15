@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
+import com.longvin.trading.config.FixClientProperties;
 import jakarta.annotation.PreDestroy;
 
 import org.slf4j.Logger;

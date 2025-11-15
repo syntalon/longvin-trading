@@ -10,6 +10,8 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
+import com.longvin.trading.config.FixClientProperties;
+import com.longvin.trading.service.OrderMirroringService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -51,9 +53,11 @@ public class MirrorTradingApplication extends MessageCracker implements Applicat
     private final Map<String, SessionID> sessionsBySenderCompId = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, PrimaryOrderState> primaryOrders = new ConcurrentHashMap<>();
     private final Set<String> processedExecIds = ConcurrentHashMap.newKeySet();
+    private final OrderMirroringService orderMirroringService;
 
-    public MirrorTradingApplication(FixClientProperties properties) {
+    public MirrorTradingApplication(FixClientProperties properties, OrderMirroringService orderMirroringService) {
         this.properties = Objects.requireNonNull(properties, "properties must not be null");
+        this.orderMirroringService = Objects.requireNonNull(orderMirroringService, "orderMirroringService must not be null");
     }
 
     @Override
@@ -95,7 +99,7 @@ public class MirrorTradingApplication extends MessageCracker implements Applicat
     }
 
     @Override
-    public void onMessage(NewOrderSingle order, SessionID sessionID) throws FieldNotFound {
+    public void onMessage(NewOrderSingle order, SessionID sessionID) {
         mirrorExplicitOrder(order, sessionID);
     }
 
@@ -104,36 +108,17 @@ public class MirrorTradingApplication extends MessageCracker implements Applicat
         handleExecutionReport(report, sessionID);
     }
 
-    private void mirrorExplicitOrder(NewOrderSingle order, SessionID sessionID) throws FieldNotFound {
+    private void mirrorExplicitOrder(NewOrderSingle order, SessionID sessionID) {
         String senderCompId = sessionID.getSenderCompID();
         if (!senderCompId.equalsIgnoreCase(properties.getPrimarySession())) {
             return;
         }
-
         if (properties.getShadowSessions().isEmpty()) {
             log.debug("No shadow sessions configured; skipping mirror for {}", order);
             return;
         }
-
-        for (String shadowSenderCompId : properties.getShadowSessions()) {
-            SessionID shadowSession = sessionsBySenderCompId.get(shadowSenderCompId);
-            if (shadowSession == null) {
-                log.warn("Shadow session {} is not logged on; unable to mirror order {}", shadowSenderCompId,
-                        getSafeClOrdId(order));
-                continue;
-            }
-
-            try {
-                NewOrderSingle mirroredOrder = cloneOrder(order);
-                overrideAccountIfNeeded(mirroredOrder, shadowSenderCompId);
-                mirroredOrder.set(new ClOrdID(generateMirrorClOrdId(shadowSenderCompId, order.getClOrdID().getValue(), "N")));
-                Session.sendToTarget(mirroredOrder, shadowSession);
-                log.info("Mirrored live order {} from {} to {}", getSafeClOrdId(order), senderCompId, shadowSenderCompId);
-            } catch (CloneNotSupportedException | SessionNotFound ex) {
-                log.error("Failed to mirror order {} to {}, reason: {}", getSafeClOrdId(order), shadowSenderCompId,
-                        ex.getMessage(), ex);
-            }
-        }
+        // Delegate to async mirroring service
+        orderMirroringService.mirrorOrderToShadowsAsync(order, senderCompId, this, sessionsBySenderCompId);
     }
 
     private void handleExecutionReport(ExecutionReport report, SessionID sessionID) throws FieldNotFound {
@@ -175,19 +160,19 @@ public class MirrorTradingApplication extends MessageCracker implements Applicat
         } else if (execType == ExecType.REPLACED) {
             handleDropCopyReplace(report, orderId);
         } else if (execType == ExecType.CANCELED) {
-            handleDropCopyCancel(report, orderId);
+            handleDropCopyCancel(orderId);
         } else {
             log.trace("Observed execution {} type {} for order {}", execId, execType, orderId);
         }
     }
 
     private void handleDropCopyNew(ExecutionReport report, String account, String orderId) throws FieldNotFound {
-        PrimaryOrderState state = primaryOrders.computeIfAbsent(orderId, id -> new PrimaryOrderState(id));
+        PrimaryOrderState state = primaryOrders.computeIfAbsent(orderId, PrimaryOrderState::new);
         state.updateFrom(report, account);
         if (!state.markMirrored()) {
             return;
         }
-        replicateNewOrderToShadows(report, state);
+        replicateNewOrderToShadows(state);
     }
 
     private void handleDropCopyReplace(ExecutionReport report, String orderId) throws FieldNotFound {
@@ -197,129 +182,100 @@ public class MirrorTradingApplication extends MessageCracker implements Applicat
             return;
         }
         state.updateFrom(report, state.account);
-        replicateReplaceToShadows(report, state);
+        replicateReplaceToShadows(state);
     }
 
-    private void handleDropCopyCancel(ExecutionReport report, String orderId) throws FieldNotFound {
+    private void handleDropCopyCancel(String orderId) {
         PrimaryOrderState state = primaryOrders.get(orderId);
         if (state == null) {
             log.warn("Received cancel exec report for unknown order {}", orderId);
             return;
         }
-        replicateCancelToShadows(report, state);
+        replicateCancelToShadows(state);
         primaryOrders.remove(orderId);
     }
 
-    private void replicateNewOrderToShadows(ExecutionReport report, PrimaryOrderState state) {
+    // --- Drop-copy mirroring helpers ---
+    private void replicateNewOrderToShadows(final PrimaryOrderState state) {
         if (properties.getShadowSessions().isEmpty()) {
             log.debug("No shadow sessions configured; skipping drop-copy mirror for order {}", state.orderId);
             return;
         }
-
-        for (String shadowSenderCompId : properties.getShadowSessions()) {
-            SessionID shadowSession = sessionsBySenderCompId.get(shadowSenderCompId);
+        for (final String shadowSenderCompId : properties.getShadowSessions()) {
+            final SessionID shadowSession = sessionsBySenderCompId.get(shadowSenderCompId);
             if (shadowSession == null) {
-                log.warn("Shadow session {} is not logged on; unable to mirror drop-copy order {}", shadowSenderCompId,
-                        state.orderId);
+                log.warn("Shadow session {} is not logged on; unable to mirror drop-copy order {}", shadowSenderCompId, state.orderId);
                 continue;
             }
-
-            ShadowOrderState shadowState = state.shadows.computeIfAbsent(shadowSenderCompId, id -> new ShadowOrderState());
-            String clOrdId = generateMirrorClOrdId(shadowSenderCompId, state.orderId, "N");
-            NewOrderSingle mirroredOrder = buildMirroredNewOrder(report, state, clOrdId, shadowSenderCompId);
+            final ShadowOrderState shadowState = state.shadows.computeIfAbsent(shadowSenderCompId, id -> new ShadowOrderState());
+            final String clOrdId = generateMirrorClOrdId(shadowSenderCompId, state.orderId, "N");
+            final NewOrderSingle mirroredOrder = buildMirroredNewOrder(state, clOrdId, shadowSenderCompId);
             if (mirroredOrder == null) {
                 continue;
             }
-
             try {
                 Session.sendToTarget(mirroredOrder, shadowSession);
                 shadowState.currentClOrdId = clOrdId;
                 log.info("Drop-copy mirrored order {} -> {} (ClOrdID={})", state.orderId, shadowSenderCompId, clOrdId);
             } catch (SessionNotFound ex) {
-                log.error("Failed to send mirrored order {} to {}, reason: {}", state.orderId, shadowSenderCompId,
-                        ex.getMessage(), ex);
+                log.error("Failed to send mirrored order {} to {}, reason: {}", state.orderId, shadowSenderCompId, ex.getMessage(), ex);
             }
         }
     }
 
-    private void replicateReplaceToShadows(ExecutionReport report, PrimaryOrderState state) {
-        for (Map.Entry<String, ShadowOrderState> entry : state.shadows.entrySet()) {
-            String shadowSenderCompId = entry.getKey();
-            ShadowOrderState shadowState = entry.getValue();
-            SessionID shadowSession = sessionsBySenderCompId.get(shadowSenderCompId);
+    private void replicateReplaceToShadows(final PrimaryOrderState state) {
+        state.shadows.forEach((shadowSenderCompId, shadowState) -> {
+            final SessionID shadowSession = sessionsBySenderCompId.get(shadowSenderCompId);
             if (shadowSession == null) {
-                log.warn("Shadow session {} is not logged on; unable to mirror replace for order {}", shadowSenderCompId,
-                        state.orderId);
-                continue;
+                log.warn("Shadow session {} is not logged on; unable to mirror replace for order {}", shadowSenderCompId, state.orderId);
+                return;
             }
             if (shadowState.currentClOrdId == null) {
                 log.debug("No known shadow order for {} on {}; skipping replace", state.orderId, shadowSenderCompId);
-                continue;
+                return;
             }
-
-            String clOrdId = generateMirrorClOrdId(shadowSenderCompId, state.orderId, "R");
-            OrderCancelReplaceRequest replace = buildMirroredReplace(report, state, clOrdId, shadowState.currentClOrdId,
-                    shadowSenderCompId);
-            if (replace == null) {
-                continue;
-            }
-
+            final String clOrdId = generateMirrorClOrdId(shadowSenderCompId, state.orderId, "R");
+            final OrderCancelReplaceRequest replace = buildMirroredReplace(state, clOrdId, shadowState.currentClOrdId, shadowSenderCompId);
             try {
                 Session.sendToTarget(replace, shadowSession);
                 shadowState.currentClOrdId = clOrdId;
-                log.info("Drop-copy mirrored replace for order {} on {} (new ClOrdID={})", state.orderId,
-                        shadowSenderCompId, clOrdId);
+                log.info("Drop-copy mirrored replace for order {} on {} (new ClOrdID={})", state.orderId, shadowSenderCompId, clOrdId);
             } catch (SessionNotFound ex) {
-                log.error("Failed to send mirrored replace for order {} to {}, reason: {}", state.orderId,
-                        shadowSenderCompId, ex.getMessage(), ex);
+                log.error("Failed to send mirrored replace for order {} to {}, reason: {}", state.orderId, shadowSenderCompId, ex.getMessage(), ex);
             }
-        }
+        });
     }
 
-    private void replicateCancelToShadows(ExecutionReport report, PrimaryOrderState state) {
-        for (Map.Entry<String, ShadowOrderState> entry : state.shadows.entrySet()) {
-            String shadowSenderCompId = entry.getKey();
-            ShadowOrderState shadowState = entry.getValue();
-            SessionID shadowSession = sessionsBySenderCompId.get(shadowSenderCompId);
+    private void replicateCancelToShadows(final PrimaryOrderState state) {
+        state.shadows.forEach((shadowSenderCompId, shadowState) -> {
+            final SessionID shadowSession = sessionsBySenderCompId.get(shadowSenderCompId);
             if (shadowSession == null) {
-                log.warn("Shadow session {} is not logged on; unable to mirror cancel for order {}", shadowSenderCompId,
-                        state.orderId);
-                continue;
+                log.warn("Shadow session {} is not logged on; unable to mirror cancel for order {}", shadowSenderCompId, state.orderId);
+                return;
             }
             if (shadowState.currentClOrdId == null) {
                 log.debug("No known shadow order for {} on {}; skipping cancel", state.orderId, shadowSenderCompId);
-                continue;
+                return;
             }
-
-            String clOrdId = generateMirrorClOrdId(shadowSenderCompId, state.orderId, "C");
-            OrderCancelRequest cancel = buildMirroredCancel(report, state, clOrdId, shadowState.currentClOrdId,
-                    shadowSenderCompId);
-            if (cancel == null) {
-                continue;
-            }
+            final String clOrdId = generateMirrorClOrdId(shadowSenderCompId, state.orderId, "C");
+            final OrderCancelRequest cancel = buildMirroredCancel(state, clOrdId, shadowState.currentClOrdId, shadowSenderCompId);
             try {
                 Session.sendToTarget(cancel, shadowSession);
                 log.info("Drop-copy mirrored cancel for order {} on {}", state.orderId, shadowSenderCompId);
             } catch (SessionNotFound ex) {
-                log.error("Failed to send mirrored cancel for order {} to {}, reason: {}", state.orderId,
-                        shadowSenderCompId, ex.getMessage(), ex);
+                log.error("Failed to send mirrored cancel for order {} to {}, reason: {}", state.orderId, shadowSenderCompId, ex.getMessage(), ex);
             }
-        }
+        });
     }
 
-    private NewOrderSingle buildMirroredNewOrder(ExecutionReport report, PrimaryOrderState state, String clOrdId,
-                                                 String shadowSenderCompId) {
+    private NewOrderSingle buildMirroredNewOrder(final PrimaryOrderState state, final String clOrdId, final String shadowSenderCompId) {
         if (state.symbol == null || state.side == null || state.orderQty == null) {
-            log.warn("Insufficient data to mirror order {}: symbol={}, side={}, qty={}", state.orderId, state.symbol,
-                    state.side, state.orderQty);
+            log.warn("Insufficient data to mirror order {}: symbol={}, side={}, qty={}", state.orderId, state.symbol, state.side, state.orderQty);
             return null;
         }
-
-        char ordType = resolveOrdType(state);
-        LocalDateTime transactTime = Optional.ofNullable(state.transactTime)
-                .orElse(LocalDateTime.now(ZoneOffset.UTC));
-
-        NewOrderSingle mirrored = new NewOrderSingle();
+        final char ordType = resolveOrdType(state);
+        final LocalDateTime transactTime = Optional.ofNullable(state.transactTime).orElse(LocalDateTime.now(ZoneOffset.UTC));
+        final NewOrderSingle mirrored = new NewOrderSingle();
         mirrored.set(new ClOrdID(clOrdId));
         mirrored.set(new HandlInst(HandlInst.AUTOMATED_EXECUTION_ORDER_PRIVATE_NO_BROKER_INTERVENTION));
         mirrored.set(new Symbol(state.symbol));
@@ -327,21 +283,16 @@ public class MirrorTradingApplication extends MessageCracker implements Applicat
         mirrored.set(new TransactTime(transactTime));
         mirrored.set(new OrdType(ordType));
         mirrored.set(new OrderQty(state.orderQty.doubleValue()));
-
         setPriceFields(ordType, state, mirrored);
         setTimeInForce(state, mirrored);
         overrideAccountIfNeeded(mirrored, shadowSenderCompId);
-
         return mirrored;
     }
 
-    private OrderCancelReplaceRequest buildMirroredReplace(ExecutionReport report, PrimaryOrderState state,
-                                                           String clOrdId, String origClOrdId, String shadowSenderCompId) {
-        char ordType = resolveOrdType(state);
-        LocalDateTime transactTime = Optional.ofNullable(state.transactTime)
-                .orElse(LocalDateTime.now(ZoneOffset.UTC));
-
-        OrderCancelReplaceRequest replace = new OrderCancelReplaceRequest();
+    private OrderCancelReplaceRequest buildMirroredReplace(final PrimaryOrderState state, final String clOrdId, final String origClOrdId, final String shadowSenderCompId) {
+        final char ordType = resolveOrdType(state);
+        final LocalDateTime transactTime = Optional.ofNullable(state.transactTime).orElse(LocalDateTime.now(ZoneOffset.UTC));
+        final OrderCancelReplaceRequest replace = new OrderCancelReplaceRequest();
         replace.set(new ClOrdID(clOrdId));
         replace.set(new OrigClOrdID(origClOrdId));
         replace.set(new Symbol(state.symbol));
@@ -351,20 +302,15 @@ public class MirrorTradingApplication extends MessageCracker implements Applicat
         if (state.orderQty != null) {
             replace.set(new OrderQty(state.orderQty.doubleValue()));
         }
-
         setPriceFields(ordType, state, replace);
         setTimeInForce(state, replace);
         overrideAccountIfNeeded(replace, shadowSenderCompId);
-
         return replace;
     }
 
-    private OrderCancelRequest buildMirroredCancel(ExecutionReport report, PrimaryOrderState state, String clOrdId,
-                                                   String origClOrdId, String shadowSenderCompId) {
-        LocalDateTime transactTime = Optional.ofNullable(state.transactTime)
-                .orElse(LocalDateTime.now(ZoneOffset.UTC));
-
-        OrderCancelRequest cancel = new OrderCancelRequest();
+    private OrderCancelRequest buildMirroredCancel(final PrimaryOrderState state, final String clOrdId, final String origClOrdId, final String shadowSenderCompId) {
+        final LocalDateTime transactTime = Optional.ofNullable(state.transactTime).orElse(LocalDateTime.now(ZoneOffset.UTC));
+        final OrderCancelRequest cancel = new OrderCancelRequest();
         cancel.set(new ClOrdID(clOrdId));
         cancel.set(new OrigClOrdID(origClOrdId));
         cancel.set(new Symbol(state.symbol));
@@ -376,6 +322,7 @@ public class MirrorTradingApplication extends MessageCracker implements Applicat
         overrideAccountIfNeeded(cancel, shadowSenderCompId);
         return cancel;
     }
+    // --- End of drop-copy mirroring helpers ---
 
     private void setPriceFields(char ordType, PrimaryOrderState state, Message message) {
         if (state.price != null && (ordType == OrdType.LIMIT || ordType == OrdType.STOP_LIMIT
@@ -405,11 +352,11 @@ public class MirrorTradingApplication extends MessageCracker implements Applicat
         return OrdType.MARKET;
     }
 
-    private NewOrderSingle cloneOrder(NewOrderSingle order) throws CloneNotSupportedException {
+    public NewOrderSingle cloneOrder(NewOrderSingle order) throws CloneNotSupportedException {
         return (NewOrderSingle) order.clone();
     }
 
-    private void overrideAccountIfNeeded(Message order, String shadowSenderCompId) {
+    public void overrideAccountIfNeeded(Message order, String shadowSenderCompId) {
         Map<String, String> overrides = properties.getShadowAccounts();
         if (overrides.isEmpty()) {
             return;
@@ -417,7 +364,7 @@ public class MirrorTradingApplication extends MessageCracker implements Applicat
         Optional.ofNullable(overrides.get(shadowSenderCompId)).ifPresent(account -> order.setField(new Account(account)));
     }
 
-    private String generateMirrorClOrdId(String shadowSenderCompId, String source, String action) {
+    public String generateMirrorClOrdId(String shadowSenderCompId, String source, String action) {
         String base = properties.getClOrdIdPrefix() + action + "-" + shadowSenderCompId + "-" + source;
         if (base.length() > 19) {
             return base.substring(base.length() - 19);
@@ -425,7 +372,7 @@ public class MirrorTradingApplication extends MessageCracker implements Applicat
         return base;
     }
 
-    private String getSafeClOrdId(NewOrderSingle order) {
+    public String getSafeClOrdId(NewOrderSingle order) {
         try {
             return order.getClOrdID().getValue();
         } catch (FieldNotFound e) {
@@ -433,14 +380,10 @@ public class MirrorTradingApplication extends MessageCracker implements Applicat
         }
     }
 
-    public Set<String> getOnlineSessions() {
-        return sessionsBySenderCompId.keySet();
-    }
 
     private static final class PrimaryOrderState {
         private final String orderId;
         private volatile boolean mirrored;
-        private String clOrdId;
         private String account;
         private String symbol;
         private Character side;
@@ -457,7 +400,6 @@ public class MirrorTradingApplication extends MessageCracker implements Applicat
         }
 
         private void updateFrom(ExecutionReport report, String account) throws FieldNotFound {
-            this.clOrdId = report.getClOrdID().getValue();
             this.account = account;
             if (report.isSetField(Symbol.FIELD)) {
                 this.symbol = report.getString(Symbol.FIELD);
