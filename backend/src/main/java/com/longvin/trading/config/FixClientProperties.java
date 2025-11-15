@@ -9,6 +9,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
+import lombok.Getter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 import org.springframework.validation.annotation.Validated;
@@ -17,13 +18,20 @@ import org.springframework.validation.annotation.Validated;
 @ConfigurationProperties(prefix = "trading.fix")
 public class FixClientProperties {
 
+    @Getter
     private final boolean enabled;
+    @Getter
     private final String configPath;
+    @Getter
     private final String primarySession;
     private final String primaryAccount;
+    @Getter
     private final Set<String> shadowSessions;
+    @Getter
     private final Map<String, String> shadowAccounts;
+    @Getter
     private final Set<String> shadowAccountValues;
+    @Getter
     private final String clOrdIdPrefix;
 
     public FixClientProperties(
@@ -48,35 +56,8 @@ public class FixClientProperties {
         this.clOrdIdPrefix = Objects.requireNonNull(clOrdIdPrefix, "clOrdIdPrefix must not be null");
     }
 
-    public boolean isEnabled() {
-        return enabled;
-    }
-
-    public String getConfigPath() {
-        return configPath;
-    }
-
-    public String getPrimarySession() {
-        return primarySession;
-    }
-
     public Optional<String> getPrimaryAccount() {
         return Optional.ofNullable(primaryAccount);
     }
 
-    public Set<String> getShadowSessions() {
-        return shadowSessions;
-    }
-
-    public Map<String, String> getShadowAccounts() {
-        return shadowAccounts;
-    }
-
-    public Set<String> getShadowAccountValues() {
-        return shadowAccountValues;
-    }
-
-    public String getClOrdIdPrefix() {
-        return clOrdIdPrefix;
-    }
 }

@@ -13,8 +13,8 @@ import java.util.stream.StreamSupport;
 import com.longvin.trading.config.FixClientProperties;
 import jakarta.annotation.PreDestroy;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
+
 import org.springframework.context.SmartLifecycle;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
@@ -23,23 +23,20 @@ import org.springframework.stereotype.Component;
 import quickfix.ConfigError;
 import quickfix.DefaultMessageFactory;
 import quickfix.Dictionary;
-import quickfix.LogFactory;
 import quickfix.MemoryStoreFactory;
 import quickfix.MessageFactory;
 import quickfix.MessageStoreFactory;
 import quickfix.RuntimeError;
 import quickfix.SessionID;
 import quickfix.SessionSettings;
-import quickfix.SLF4JLogFactory;
 import quickfix.SocketAcceptor;
 import quickfix.SocketInitiator;
 
 @Component
+@Slf4j
 public class FixSessionManager implements SmartLifecycle {
 
-    private static final Logger log = LoggerFactory.getLogger(FixSessionManager.class);
-
-    private final MirrorTradingApplication application;
+    private final OrderReplicationCoordinator application;
     private final FixClientProperties properties;
     private final ResourceLoader resourceLoader;
 
@@ -47,7 +44,7 @@ public class FixSessionManager implements SmartLifecycle {
     private SocketInitiator initiator;
     private SocketAcceptor acceptor;
 
-    public FixSessionManager(MirrorTradingApplication application,
+    public FixSessionManager(OrderReplicationCoordinator application,
                              FixClientProperties properties,
                              ResourceLoader resourceLoader) {
         this.application = Objects.requireNonNull(application, "application must not be null");
@@ -72,8 +69,7 @@ public class FixSessionManager implements SmartLifecycle {
 
                 if (hasSessions(acceptorSettings)) {
                     MessageStoreFactory storeFactory = new MemoryStoreFactory();
-                    LogFactory logFactory = new SLF4JLogFactory(acceptorSettings);
-                    acceptor = new SocketAcceptor(application, storeFactory, acceptorSettings, logFactory, messageFactory);
+                    acceptor = new SocketAcceptor(application, storeFactory, acceptorSettings, null, messageFactory);
                     acceptor.start();
                     startedSomething = true;
                     log.info("FIX acceptor started for drop-copy sessions: {}", describeSessions(acceptorSettings));
@@ -81,8 +77,7 @@ public class FixSessionManager implements SmartLifecycle {
 
                 if (hasSessions(initiatorSettings)) {
                     MessageStoreFactory storeFactory = new MemoryStoreFactory();
-                    LogFactory logFactory = new SLF4JLogFactory(initiatorSettings);
-                    initiator = new SocketInitiator(application, storeFactory, initiatorSettings, logFactory, messageFactory);
+                    initiator = new SocketInitiator(application, storeFactory, initiatorSettings, null, messageFactory);
                     initiator.start();
                     startedSomething = true;
                     log.info("FIX initiator started. Order-entry sessions: {}", describeSessions(initiatorSettings));

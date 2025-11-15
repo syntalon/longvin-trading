@@ -8,7 +8,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
 @Configuration
-public class OrderMirroringConfig {
+public class ThreadPoolConfig {
     @Bean(name = "orderMirroringExecutor")
     public Executor orderMirroringExecutor(@Value("${mirror.order.threadPoolSize:8}") int threadPoolSize) {
         return Executors.newFixedThreadPool(threadPoolSize);

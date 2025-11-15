@@ -11,7 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 import com.longvin.trading.config.FixClientProperties;
-import com.longvin.trading.service.OrderMirroringService;
+import com.longvin.trading.service.OrderReplicationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -45,19 +45,19 @@ import quickfix.fix44.OrderCancelReplaceRequest;
 import quickfix.fix44.OrderCancelRequest;
 
 @Component
-public class MirrorTradingApplication extends MessageCracker implements Application {
+public class OrderReplicationCoordinator extends MessageCracker implements Application {
 
-    private static final Logger log = LoggerFactory.getLogger(MirrorTradingApplication.class);
+    private static final Logger log = LoggerFactory.getLogger(OrderReplicationCoordinator.class);
 
     private final FixClientProperties properties;
     private final Map<String, SessionID> sessionsBySenderCompId = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, PrimaryOrderState> primaryOrders = new ConcurrentHashMap<>();
     private final Set<String> processedExecIds = ConcurrentHashMap.newKeySet();
-    private final OrderMirroringService orderMirroringService;
+    private final OrderReplicationService orderReplicationService;
 
-    public MirrorTradingApplication(FixClientProperties properties, OrderMirroringService orderMirroringService) {
+    public OrderReplicationCoordinator(FixClientProperties properties, OrderReplicationService orderReplicationService) {
         this.properties = Objects.requireNonNull(properties, "properties must not be null");
-        this.orderMirroringService = Objects.requireNonNull(orderMirroringService, "orderMirroringService must not be null");
+        this.orderReplicationService = Objects.requireNonNull(orderReplicationService, "orderMirroringService must not be null");
     }
 
     @Override
@@ -118,7 +118,7 @@ public class MirrorTradingApplication extends MessageCracker implements Applicat
             return;
         }
         // Delegate to async mirroring service
-        orderMirroringService.mirrorOrderToShadowsAsync(order, senderCompId, this, sessionsBySenderCompId);
+        orderReplicationService.replicateOrderToShadowsAsync(order, senderCompId, this, sessionsBySenderCompId);
     }
 
     private void handleExecutionReport(ExecutionReport report, SessionID sessionID) throws FieldNotFound {
