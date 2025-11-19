@@ -76,6 +76,23 @@ public class FixSessionManager implements SmartLifecycle {
                 }
 
                 if (hasSessions(initiatorSettings)) {
+                    // Log the HeartBtInt setting to verify it's being used
+                    try {
+                        Properties defaults = initiatorSettings.getDefaultProperties();
+                        if (defaults != null && defaults.containsKey("HeartBtInt")) {
+                            log.info("FIX initiator HeartBtInt from DEFAULT: {} seconds", defaults.getProperty("HeartBtInt"));
+                        }
+                        Iterator<SessionID> sessionIterator = initiatorSettings.sectionIterator();
+                        while (sessionIterator.hasNext()) {
+                            SessionID sessionID = sessionIterator.next();
+                            Properties sessionProps = initiatorSettings.getSessionProperties(sessionID);
+                            if (sessionProps != null && sessionProps.containsKey("HeartBtInt")) {
+                                log.info("FIX initiator session {} HeartBtInt: {} seconds", sessionID, sessionProps.getProperty("HeartBtInt"));
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.debug("Could not log HeartBtInt settings: {}", e.getMessage());
+                    }
                     MessageStoreFactory storeFactory = new MemoryStoreFactory();
                     initiator = new SocketInitiator(application, storeFactory, initiatorSettings, null, messageFactory);
                     initiator.start();

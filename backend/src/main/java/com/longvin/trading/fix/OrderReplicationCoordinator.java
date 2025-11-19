@@ -75,17 +75,93 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
     @Override
     public void onLogout(SessionID sessionID) {
         sessionsBySenderCompId.remove(sessionID.getSenderCompID());
-        log.info("Logged out from FIX session {}", sessionID);
+        try {
+            Session session = Session.lookupSession(sessionID);
+            if (session != null) {
+                log.warn("Logged out from FIX session {} - Session state: isLoggedOn={}, isEnabled={}", 
+                    sessionID, session.isLoggedOn(), session.isEnabled());
+            } else {
+                log.warn("Logged out from FIX session {} - Session object not found", sessionID);
+            }
+        } catch (Exception e) {
+            log.warn("Logged out from FIX session {} - Error getting session details: {}", sessionID, e.getMessage());
+        }
+        log.warn("Logged out from FIX session {} - this may indicate a connection issue or server-side timeout", sessionID);
     }
 
     @Override
     public void toAdmin(Message message, SessionID sessionID) {
-        // no-op
+        try {
+            String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
+            if ("A".equals(msgType)) {
+                // Add ResetSeqNumFlag to reset sequence numbers on logon
+                // This helps when there's a sequence number mismatch with the server
+                if (!message.isSetField(quickfix.field.ResetSeqNumFlag.FIELD)) {
+                    message.setField(new quickfix.field.ResetSeqNumFlag(true));
+                }
+                // Extract our heartbeat interval to log it
+                int clientHeartBtInt = -1;
+                if (message.isSetField(quickfix.field.HeartBtInt.FIELD)) {
+                    clientHeartBtInt = message.getInt(quickfix.field.HeartBtInt.FIELD);
+                }
+                log.info("Sending Logon request to {}: Client HeartBtInt={} seconds, message={}", 
+                    sessionID, clientHeartBtInt, message);
+            } else if ("5".equals(msgType)) {
+                log.info("Sending Logout to {}: {}", sessionID, message);
+            } else if ("0".equals(msgType)) {
+                // Heartbeat - log to verify they're being sent
+                int seqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
+                log.info("Sending Heartbeat to {}: seqNum={}", sessionID, seqNum);
+            } else if ("1".equals(msgType)) {
+                log.debug("Sending TestRequest to {}", sessionID);
+            }
+        } catch (Exception e) {
+            log.debug("Error processing outgoing admin message to {}: {}", sessionID, e.getMessage());
+        }
     }
 
     @Override
     public void fromAdmin(Message message, SessionID sessionID) {
-        // no-op
+        try {
+            String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
+            if ("A".equals(msgType)) {
+                int seqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
+                // Extract server's heartbeat interval (field 108)
+                int serverHeartBtInt = -1;
+                if (message.isSetField(quickfix.field.HeartBtInt.FIELD)) {
+                    serverHeartBtInt = message.getInt(quickfix.field.HeartBtInt.FIELD);
+                }
+                log.info("Received Logon response from {}: seqNum={}, Server HeartBtInt={} seconds, message={}", 
+                    sessionID, seqNum, serverHeartBtInt, message);
+            } else if ("5".equals(msgType)) {
+                String text = message.isSetField(quickfix.field.Text.FIELD) 
+                    ? message.getString(quickfix.field.Text.FIELD) 
+                    : "No reason provided";
+                int seqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
+                log.warn("Received Logout from {}: seqNum={}, reason={}", sessionID, seqNum, text);
+            } else if ("0".equals(msgType)) {
+                // Heartbeat message - log to verify connection is alive
+                try {
+                    int seqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
+                    // Check if this is a response to a TestRequest
+                    boolean isTestResponse = message.isSetField(quickfix.field.TestReqID.FIELD);
+                    if (isTestResponse) {
+                        String testReqId = message.getString(quickfix.field.TestReqID.FIELD);
+                        log.info("Received Heartbeat (TestRequest response) from {}: seqNum={}, TestReqID={}", sessionID, seqNum, testReqId);
+                    } else {
+                        log.info("Received Heartbeat from {}: seqNum={}", sessionID, seqNum);
+                    }
+                } catch (Exception e) {
+                    log.warn("Error processing heartbeat from {}: {}", sessionID, e.getMessage(), e);
+                }
+            } else if ("1".equals(msgType)) {
+                log.debug("Received TestRequest from {}", sessionID);
+            } else {
+                log.debug("Received admin message {} from {}: {}", msgType, sessionID, message);
+            }
+        } catch (Exception e) {
+            log.debug("Error processing admin message from {}: {}", sessionID, e.getMessage());
+        }
     }
 
     @Override
