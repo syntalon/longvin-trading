@@ -1,0 +1,2006 @@
+
+
+
+
+
+
+
+
+DAS FIX Specification
+
+
+DAS, Inc.
+
+
+
+Confidential
+
+This document contains confidential and proprietary information of the DAS Inc.
+
+
+Contents
+
+Revision History	4
+	•	Introduction	4
+	•	Terms	4
+	•	Supported FIX Version	4
+	•	Session Level Messages	5
+	•	Standard Message Header	5
+	•	Standard Message Trailer	6
+	•	Logon	6
+	•	Logout	6
+	•	Resend Request	7
+	•	Sequence Reset	7
+	•	Application Messages	8
+	•	New Order - Single	8
+	•	Cancel/Replace Order Definition	11
+	•	Cancel Order Definition	12
+	•	Order Cancel Reject	12
+	•	Execution Report (Single & Multi-leg)	13
+	•	New Complex (Multi-leg) Order	16
+	•	Complex (Multi-leg) Order Cancel, and execution report	17
+	•	Complex (Multi-leg) cancel/replace Order	18
+	•	Complex (Multi-leg) Order Cancel Reject	19
+	•	Symbol Shortable Info	19
+	•	Short Locate Quote Request.	20
+	•	Short Locate Quote Response	20
+	•	Short Locate Accept/Reject offer	21
+	•	Short Locate New Order/Execution	21
+
+
+Revision History
+
+Author
+Date
+Notes
+Tim Bian
+2011-9-14
+Add ECN fee tag 9102 to execution report.
+Tim Bian
+2011-9-19
+Update tag 59 mapping: 0->Day, 5->Day+
+Tim Bian
+2011-11-22
+Add Symbol shortlist message (DAS internal usage, not required for customers except notify specially)
+Tim Bian
+2012-7-23
+Add complex order.
+Tim Bian
+2012-11-8
+Change ClOrdID length from 20 to 19 chars.
+Tim Bian
+2014-07-21
+Re-organize document.
+Tim Bian
+2020-03-11
+Add tag 9010 for route ExecID for Execution Report.
+Tim Bian
+2021-07-14
+Add Short Locate message types: 3.11 Short Locate Quote Request, 3.12 Short Locate Quote Response and 3.13 Short Locate New Order/Execution
+
+	•	Introduction
+	•	Terms
+
+The purpose of this document is to describe how DAS FIX API implements various order types, and functionality unique to the DAS FIX. DAS FIX API is integrated into DAS Order Server architecture which can process one order in microsecond-level.
+
+
+	•	Supported FIX Version
+
+Supported FIX Version: FIX4.2
+
+
+DAS has the flexibility to customize and manipulate FIX message formats and their respective field values based on business requirements.
+
+* Please note that we do not support Encryption.
+
+
+	•	Session Level Messages
+
+	•	Standard Message Header
+
+All types of messages, application, administrative, etc., will be preceded with a header. The standard elements that make up a FIX header are message type, length, destination, sequence number, origination point and time.
+The following table lists the fields used in a standard message header in FIX 4.2. The * denotes a required field per FIX.
+
+Field
+Name
+Required
+Description
+8
+BeginString
+Y
+	•	Always set to FIX 4.2,
+
+	•	This must be the first field in the message.
+9
+BodyLength
+Y
+Should be second field in message
+35
+MsgType
+Y
+Should be third field in message
+49
+SenderCompID
+Y
+
+56
+TargetCompID
+Y
+
+34
+MsgSeqNum
+Y
+
+43
+PossDupFlag
+N
+
+97
+PossResend
+N
+
+52
+SendingTime
+Y
+Time message was sent. Not transaction time:
+
+Format: YYYYMMDD-hh:mm:ss (expressed in UTC/GMT)
+122
+OrigSendingTime
+N
+Time original message was sent (if available). Used on a
+
+
+
+
+
+
+Resend
+
+Format: YYYYMMDD-hh:mm:ss (expressed in UTC/GMT)
+
+
+	•	Standard Message Trailer
+
+Each message is followed by a standard trailer. The trailer is used to segregate messages and contains the three-digit character representation of the Checksum value.
+
+Field
+Name
+Required
+Description
+10
+CheckSum
+Y
+
+
+
+	•	Logon
+
+The logon message authenticates client establishing a connection to DAS system. The logon message must be the first message sent by the application requesting to initiate a FIX session.
+
+Tag
+Field
+Required
+Comments
+
+Header
+Y
+MsgType = A
+98
+EncryptMethod
+Y
+Always unencrypted
+
+
+108
+
+
+HeartBtInt
+
+
+Y
+The FIX server uses the incoming designated heartbeat interval as the number of seconds to heartbeat.
+
+
+
+
+141
+
+
+
+
+ResetSeqNumFlag
+
+
+
+
+N
+Indicates that the both sides of the FIX session should
+reset sequence numbers. Valid values:
+Y = Yes, reset sequence numbers N = No
+
+Trailer
+Y
+
+
+	•	Logout
+
+
+Tag
+Field
+Required
+Comments
+
+Header
+Y
+MsgType = 5
+
+
+
+
+Trailer
+Y
+
+
+
+	•	Resend Request
+
+The resend request is sent by the receiving application to initiate the retransmission of messages. This function is utilized if a sequence number gap is detected, if the receiving application lost a message, or as a function of the initialization process.
+The resend request can be used to request a single message, a range of messages or all messages subsequent to a particular message.
+
+
+
+Tag
+Field
+Required
+Comments
+
+Header
+Y
+MsgType = 2
+7
+BeginSeqNo
+Y
+
+16
+EndSeqNo
+Y
+
+
+Trailer
+Y
+
+
+
+	•	Sequence Reset
+
+The sequence reset message is used by the sending application to reset the incoming sequence number on the opposing side.
+
+If the GapFillFlag field is present (and equal to Y), the MsgSeqNum should conform to standard message sequencing rules (i.e. the MsgSeqNum of the Sequence Reset-GapFill message should represent the beginning MsgSeqNum in the GapFill range because the remote side is expecting that next message).
+
+If the GapFillFlag field is not present (or set to N), it can be assumed that the purpose of the sequence reset message is to recover from an out-of-sequence condition. The MsgSeqNum in the header should be ignored.
+Tag
+Field
+Required
+Comments
+
+Header
+Y
+MsgType = 4
+123
+GapFillFlag
+N
+
+36
+NewSeqNo
+Y
+
+
+Trailer
+Y
+
+
+
+	•	Application Messages
+
+
+	•	New Order - Single
+
+This table defines tags and their values to make a new order for FIX API.
+
+Tag
+Field
+Req'd
+Supported value/Comments
+
+Header
+Y
+MsgType=D
+
+
+11
+
+
+ClOrdID
+
+
+Y
+Unique identifier of the order as assigned by institution. ClOrdID length must not over 39 chars. If more than 39 chars are set, DAS FIX API will trim to 39 from the beginning.
+
+
+54
+
+
+Side
+
+
+Y
+1 = Buy
+2 = Sell
+5 = Sell short
+55
+Symbol
+Y
+
+65
+SymbolSfx
+N
+
+
+
+38
+
+
+OrderQty
+
+
+Y
+Number of shares ordered. This represents the number of shares for equities or based on normal convention the number of contracts for options, futures.
+
+
+167
+
+
+SecurityType
+
+
+N
+Required for FUT and OPT OPT = Option
+FUT = Future
+
+
+200
+
+
+MaturityMonthYear
+
+
+N
+Required for Option Month and Year of the maturity for SecurityType=FUT or SecurityType=OPT. Required if MaturityDay is specified.
+Format: YYYYMM
+
+
+
+
+201
+
+
+
+
+PutOrCall
+
+
+
+
+N
+Required for Option Indicates whether an Option is for a put or call.
+
+Valid values:
+0 = Put
+1 = Call
+
+
+
+205
+
+
+
+MaturityDay
+
+
+
+N
+Required for Option Day of month used in conjunction with MaturityMonthYear to specify the maturity date for SecurityType=FUT or SecurityType=OPT.
+Valid values:
+1-31
+
+202
+
+StrikePrice
+
+N
+Required for Option
+Strike Price for an Option.
+
+
+203
+
+
+CoveredOrUncovered
+
+
+N
+Required for Option Valid values:
+0 = Covered
+1 = Uncovered
+
+
+
+
+
+
+
+
+
+40
+
+
+
+
+
+
+OrdType
+
+
+
+
+
+
+Y
+
+1 = Market
+2 = Limit
+3 = Stop
+4 = Stop limit
+5 = Market on close B = Limit on close P = Pegged
+44
+Price
+N
+Required when OrdType = 2, 4, B
+99
+StopPx
+N
+Required when OrdType = 3, 4. Stop price.
+
+
+
+
+
+
+
+
+59
+
+
+
+
+
+
+
+
+TimeInForce
+
+
+
+
+
+
+
+
+N
+Specifies how long the order remains in effect.
+
+0 = Day
+1 = Good Till Cancel (GTC) (SmartRoute doesn’t support)
+2 = At the Opening (OPG)
+3 = Immediate or Cancel (IOC)
+5 = Day+ (extended trading hours)
+6 = Good Till Date (Tag 126 ExpireTime value should be set)
+7 = At the Closing
+If this tag is not set, Day+ will be used.
+
+
+
+126
+
+
+
+ExpireTime
+
+
+
+N
+Time/Date of order expiration (always expressed in UTC). Required when tag 59 is 6 (Good Till Date).
+Format: YYYYMMDD-HH:MM:SS, example: 20101214- 15:30:00
+
+
+
+
+
+
+
+
+
+18
+
+
+
+
+
+
+
+
+
+ExecInst
+
+
+
+
+
+
+
+
+
+Y
+Instructions for order handling on exchange trading floor. If more than one instruction is applicable to an order, this field can contain multiple instructions separated by space.
+
+1 = Not held 5 = Held
+G = All or none – AON M = Mid-price peg
+P = Market peg L = Last peg
+R = Primary peg
+
+
+
+111
+
+
+
+MaxFloor
+
+
+
+N
+Maximum number of shares within an order to be shown on the exchange floor at any given time.
+
+If this tag is not set, default max floor is equal to the order quantity.
+
+
+1
+
+
+Account
+
+
+Y
+Client account on DAS system. If there is default account configured, this tag is not required.
+Maximum 10 chars.
+
+
+100
+
+
+ExDestination
+
+
+N
+Execution destination as defined by institution when order is entered.
+If this tag is not defined, default route will be used.
+207
+SecurityExchange
+N
+Market used to help identify a security. Equity only.
+If this tag is not in the FIX message, please inform DAS to take care of it.
+Valid values:
+O: NASDAQ
+
+
+
+
+
+
+N: NYSE A: AMEX 11: OTCBB
+PNK: Pink Sheet TO: TSX
+9003
+Broker Symbol
+N
+
+9004
+Post Only
+N
+Y-Post Only
+9005
+No Route Out
+N
+Y-No Route Out
+9007
+Order IP
+N
+DWORD
+9008
+User ID
+N
+String
+9099
+ALGO Parameters
+N
+Pass ALGO parameters from sub OM to master OM.
+
+Trailer
+Y
+
+
+Special notices:
+
+	•	For Pegged order type, DAS FIX API will treat it as Primary order automatically no matter what value in Tag 18.
+
+	•	For Market/Limit on close order type (5, B), Time In Force will be ignored no matter what value in Tag 59.
+
+An example:
+
+8=FIX.4.2 9=156 35=D 49=SID1 56=DAS 34=2 52=20100729-06:18:08 11=S100729000001 54=1
+55=MSFT 38=100 40=2 44=25.000000 59=0 60=20100729-06:18:08 100=TEST 207=Q 10=229
+
+
+
+
+
+	•	Cancel/Replace Order Definition
+
+This table defines tags and their values to make a Cancel/Replace order for FIX API.
+
+Tag
+Field
+Req'd
+Supported value/Comments
+
+Header
+Y
+MsgType=G
+
+
+11
+
+
+ClOrdID
+
+
+Y
+
+ClOrdID length must not over 19 chars. If more than 19 chars are set, DOS FIX API will trim to 19 from the beginning.
+
+41
+
+OrigClOrdID
+
+Y
+ClOrdID of the previous order (NOT the initial order of the day) when canceling or replacing an order.
+
+
+54
+
+
+Side
+
+
+Y
+1 = Buy
+2 = Sell
+5 = Sell short
+55
+Symbol
+Y
+
+38
+OrderQty
+Y
+
+
+
+
+
+
+
+40
+
+
+
+
+
+
+OrdType
+
+
+
+
+
+
+Y
+1 = Market
+2 = Limit
+3 = Stop
+4 = Stop limit
+5 = Market on close B = Limit on close P = Pegged
+44
+Price
+N
+Price is required when OrdType = 2, 4, B
+99
+StopPx
+N
+StopPx is required when OrdType = 3, 4
+
+
+
+59
+
+
+
+TimeInForce
+
+
+
+N
+
+0 = Day
+1 = Good Till Cancel (GTC)
+2 = At the Opening (OPG)
+3 = Immediate or Cancel (IOC)
+
+
+
+111
+
+
+
+MaxFloor
+
+
+
+N
+
+
+
+18
+
+
+ExecInst
+
+
+N
+1 = Not held 5 = Held
+G = All or none - AON
+
+
+Trailer
+
+Y
+
+
+An example:
+
+
+8=FIX.4.2	9=174	35=G	49=SID1	56=DAS	34=11	52=20100729-06:21:32	11=S100729000004
+41=S100729000003 54=1 55=MSFT 38=200 40=2 44=25.000000 59=0 60=20100729-06:21:32 10=086
+
+
+
+	•	Cancel Order Definition
+
+This table defines required tags to cancel an order.
+
+Tag
+Field
+Req'd
+Supported value/Comments
+
+Header
+Y
+MsgType=F
+
+
+11
+
+
+ClOrdID
+
+
+Y
+
+ClOrdID length must not over 19 chars. If more than 19 chars are set, DOS FIX API will trim to 19 from the beginning.
+
+41
+
+OrigClOrdID
+
+Y
+ClOrdID of the previous order (NOT the initial order of the day) when canceling or replacing an order.
+
+
+54
+
+
+Side
+
+
+Y
+1 = Buy
+2 = Sell
+5 = Sell short
+38
+OrderQty
+Y
+
+
+Trailer
+Y
+
+
+	•	Order Cancel Reject
+
+Order Cancel Reject message will be sent when an order cancel or cancel/replace request can’t be achieved.
+
+Tag
+Field
+Req'd
+Comments
+
+Header
+Y
+
+35
+MsgType
+Y
+MsgType = 9
+11
+ClOrdID
+Y
+
+
+
+41
+
+
+OrigClOrdID
+
+
+Y
+ClOrdID of the previous order
+(NOT the initial order of the day) when canceling or replacing an order.
+
+
+
+
+39
+
+
+
+
+OrdStatus
+
+
+
+
+N
+current status of order,	Values:
+0 – New
+1 – Partially filled
+2 – Filled
+4 – Canceled
+8 – Rejected
+
+37
+
+OrderID
+
+Y
+Unique identifier for Order in DAS system.
+
+
+
+
+
+
+
+102
+
+
+
+
+CxlRejReason
+
+
+
+
+Y
+Code to identify reason for cancel rejection.
+Valid values:
+1 = Unknown order
+2 = Broker Option
+58
+Text
+Y
+Text description for this message.
+
+Trailer
+Y
+
+
+
+
+	•	Execution Report (Single & Multi-leg)
+
+Order acknowledgements, Cancel acknowledgements, Cancel-Replace acknowledgements (Pending Cancel-Replacement), Fills and Rejects are all sent using the Execution report message type.
+
+Tag
+Field
+Req'd
+Comments
+
+Header
+Y
+MsgType = 8
+
+37
+
+OrderID
+
+Y
+
+Unique Order ID assigned by DAS.
+
+
+17
+
+
+ExecID
+
+
+Y
+Unique identifier of execution message as assigned by DAS.
+Unique for each Execution Report message
+11
+ClOrdID
+Y
+
+
+
+
+
+41
+
+
+
+
+OrigClOrdID
+
+
+
+
+N
+
+Conditionally required for response to an Cancel or Cancel/Replace request (ExecType=PendingCancel, Replaced, or Canceled). ClOrdID of the previous order (NOT the initial order of the day) when canceling or replacing an order.
+58
+Text
+N
+Text description for this execution report.
+
+
+
+
+20
+
+
+
+
+ExecTransType
+
+
+
+
+Y
+Identifies transaction type Valid values:
+0 = New
+1 = Cancel
+2 = Correct
+
+
+
+
+19
+
+
+
+
+ExecRefID
+
+
+
+
+N
+
+
+Required for fill cancel and correct message. Reference identifier used with Cancel and Correct transaction types.
+150
+ExecType
+Y
+Describes the type of execution report. Same possible values as OrdStatus.
+
+
+
+
+
+
+Values:
+	•	– New
+	•	– Partially filled
+	•	– Filled
+	•	– Canceled
+	•	- Replaced
+
+
+
+
+
+
+
+
+
+
+39
+
+
+
+
+
+
+
+
+
+
+OrdStatus
+
+
+
+
+
+
+
+
+
+
+Y
+Describes the current state of a CHAIN of orders
+
+Values:
+0 = New
+1 = Partially filled
+2 = Filled
+4 = Canceled
+5 = Replaced
+6 = Pending Cancel E = Pending Replace
+B = Calculated. (For DAS, B is for locate route (wit route type 1), if locate is offered, 39=B).
+55
+Symbol
+Y
+
+54
+Side
+Y
+
+44
+Price
+Y
+
+151
+LeavesQty
+Y
+Amount of shares open for further execution.
+14
+CumQty
+Y
+Currently executed shares for chain of orders.
+6
+AvgPx
+Y
+
+38
+OrderQty
+Y
+
+32
+Last Shares
+Y
+Quantity of shares bought/sold on this fill
+31
+Last Price
+Y
+Price of this fill
+
+
+
+9100
+
+
+
+Liquidity Indicator
+
+
+
+Y
+Trade specific. Values:
+A – Add Liquidity;
+R – Remove Liquidity; X – Route Out
+9101
+Execution Type
+Y
+Trade specific. Specific indicator for trade’s type.
+9102
+ECN Fee
+Y
+For fill report, this field is ECN fee charged for this fill.
+60
+Transact Time
+Y
+
+
+
+203
+
+
+CoveredOrUncovered
+
+
+N
+Only for options. Valid values:
+0 = Covered
+1 = Uncovered
+
+
+77
+
+
+OpenClose
+
+
+N
+Only for options. Valid Values: O=Open C=Close
+9000
+Route
+N
+Route for this order.
+9009
+Branch
+N
+Branch name.
+9010
+Route ExecID
+N
+ExecID from route.
+9011
+trade token
+N
+
+9037
+Original OrderID
+N
+Original order id assigned by DAS for primary order.
+
+
+
+
+
+
+For primary order, this tag value is 0.
+
+
+654
+
+
+LegRefID
+
+
+N
+Only for complex order.
+Refer to which leg of complex order this message is for.
+
+Trailer
+Y
+
+
+Following are execution report FIX message examples.
+
+Order acknowledgements (Order Accept):
+8=FIX.4.2 9=174 35=8 49=DAS 56=SID1 34=73 52=20100729-06:51:56 17=5 37=2 11=S100729000005
+54=1 20=0 150=0 39=0 6=25.000000 38=100 44=25.000000 59=0 151=100 14=0 55=MSFT 60=20100729-
+06:51:56 10=186
+
+Order Rejected:
+8=FIX.4.2 9=193 35=8 49=DAS 56=SID1 34=94 52=20100729-06:59:30 17=13 37=0 11=S100729000011
+54=1 58=Route disable! 20=0 150=8 39=8 6=31.000000 38=100 44=31.000000 59=0 151=100 14=0
+55=MSFT 60=19700101-00:00:00 10=168
+
+Pending Cancel:
+8=FIX.4.2 9=191 35=8 49=DAS 56=SID1 34=76 52=20100729-06:52:58 17=6 37=2 11=S100729000006
+41=S100729000005 54=1 20=0 150=6 39=6 6=25.000000 38=100 44=25.000000 59=0 151=100 14=0
+55=MSFT 60=20100729-06:51:56 10=027
+
+Canceled:
+8=FIX.4.2 9=201 35=8 49=DAS 56=SID1 34=77 52=20100729-06:52:58 17=7 37=2 11=S100729000006
+41=S100729000005 54=1 58=Canceled 20=0 150=4 39=4 6=25.000000 38=100 44=25.000000 59=0
+151=0 14=0 55=MSFT 60=20100729-06:52:58 10=109
+
+Pending Cancel/Replace:
+8=FIX.4.2 9=191 35=8 49=DAS 56=SID1 34=83 52=20100729-06:55:32 17=9 37=3 11=S100729000008
+41=S100729000007 54=1 20=0 150=E 39=E 6=25.000000 38=100 44=25.000000 59=0 151=100 14=0
+55=MSFT 60=20100729-06:55:18 10=060
+
+Replaced:
+8=FIX.4.2 9=209 35=8 49=DAS 56=SID1 34=84 52=20100729-06:55:32 17=10 37=3 11=S100729000008
+41=S100729000007 54=1 58=Replaced 20=0 150=5 39=5 40=2 6=25.000000 38=200 44=25.000000 59=0
+151=200 14=0 55=MSFT 60=20100729-06:55:32 10=226
+
+Partially Filled:
+8=FIX.4.2 9=200 35=8 49=DAS 56=SID1 34=105 52=20100729-07:01:56 17=21 37=5 11=S100729000014
+54=1 20=0 150=1 39=1 6=29.000000 31=29.000000 32=900 38=2000 44=29.000000 59=0 151=200
+14=1800 55=MSFT 60=20100729-07:01:56 10=113
+
+Filled:
+8=FIX.4.2 9=198 35=8 49=DAS 56=SID1 34=106 52=20100729-07:01:57 17=22 37=5 11=S100729000014
+
+
+54=1 20=0 150=2 39=2 6=29.000000 31=29.000000 32=200 38=2000 44=29.000000 59=0 151=0
+14=2000 55=MSFT 60=20100729-07:01:57 10=023
+
+
+	•	New Complex (Multi-leg) Order
+
+Below table defines tags for multi-leg order.
+
+Tag
+Field
+Req'd
+Supported value/Comments
+
+Header
+Y
+MsgType=AB
+
+
+11
+
+
+ClOrdID
+
+
+Y
+Unique identifier of the order as assigned by institution. ClOrdID length must not over 19 chars. If more than 19 chars are set, DAS FIX API will trim to 19 from the beginning.
+55
+Symbol
+N
+
+38
+OrderQty
+Y
+Number of times the spread is available.
+167
+SecurityType
+Y
+“MLEG” must be set.
+
+40
+
+OrdType
+
+Y
+1 = Market
+2 = Limit
+
+
+
+44
+
+
+
+Price
+
+
+
+N
+The net price of the spread.
+This field is required for Limit orders. Debit (positive) is Willing To Pay Credit (negative) is Wants Cash Back
+0 for Even orders
+
+
+
+
+59
+
+
+
+
+TimeInForce
+
+
+
+
+N
+Specifies how long the order remains in effect. 0 = Day
+3 = Immediate or Cancel (IOC)
+5 = Day+ (extended trading hours)
+
+
+
+18
+
+
+
+ExecInst
+
+
+
+Y
+Instructions for order handling on exchange trading floor. If more than one instruction is applicable to an order, this field can contain multiple instructions separated by space.
+
+G = All or none - AON
+
+
+1
+
+
+Account
+
+
+Y
+Client account on DAS system. If there is default account configured, this tag is not required.
+Maximum 10 chars.
+
+
+100
+
+
+ExDestination
+
+
+N
+Execution destination as defined by institution when order is entered.
+If this tag is not defined, default route will be used.
+555
+NoLegs
+Y
+DAS accepts 2, 3 or 4 legs
+
+
+
+654
+
+
+
+LegRefID
+
+
+
+Y
+This tag must be the first tag in each repeating group. If client’s 1st tag is 600 (LegSymbol), client need to notify DAS to configure it.
+Execution report will use this value to specify which leg reported.
+
+
+
+
+600
+
+LegSymbol
+
+Y
+On EQUITY/STOCK legs: Equity Symbol
+On OPTION legs: Root Symbol
+
+
+
+
+
+608
+
+
+
+
+
+LegCFICode
+
+
+
+
+
+Y
+For Equity leg of Buy Write or other Multi-Leg order with stock component:
+ES: Equity Common Shares [CS]
+
+For Options:
+OC: Option-Call [OPT]
+OP: Option: Put [OPT]
+
+611
+
+LegMaturityDate
+
+N
+Options leg only
+
+YYYYMMDD
+
+612
+
+LegStrikePrice
+
+N
+Options leg only
+
+Strike price for an option
+
+623
+
+LegRatioQty
+
+Y
+The ratio of quantity for this individual leg relative to the entire multi-leg security. LegRatioQty x OrderQty
+
+
+624
+
+
+LegSide
+
+
+Y
+The valid values are:
+1: Buy
+2: Sell
+5: Sell Short
+
+
+564
+
+
+LegPositionEffect
+
+
+N
+Option legs only. The valid values are: O: Open
+C: Close
+
+
+565
+
+LegCoveredOrUncove red
+
+
+N
+Option legs only. The valid values are: 0: Covered
+1: Uncovered
+
+Trailer
+Yes
+
+
+
+
+	•	Complex (Multi-leg) Order Cancel, and execution report
+
+Complex order cancel is same as single order cancel.
+
+Execution report is same as single order, NOTE: there’s tag 654 to mark which leg in complex execution report.
+
+	•	Complex (Multi-leg) cancel/replace Order
+
+For complex orders, the only elements of the existing FIX order that may be changed* are the order quantity (38) and the price (44). The order quantity can be increased or reduced. Below table defines tags for multi-leg cancel/replace order.
+
+
+
+Tag
+Field
+Req'd
+Supported value/Comments
+
+Header
+Y
+MsgType=AC
+
+
+11
+
+
+ClOrdID
+
+
+Y
+Unique identifier of the order as assigned by institution. ClOrdID length must not over 19 chars. If more than 19 chars are set, DAS FIX API will trim to 19 from the beginning.
+
+41
+
+OrigClOrdID
+
+Y
+ClOrdID of the previous order (NOT the initial order of the day) when canceling or replacing an order.
+55
+Symbol
+N
+
+
+
+38
+
+
+OrderQty
+
+
+Y
+Number of times the spread is available. Should be the “total intended order quantity” (including the amount already executed for this chain of orders)
+167
+SecurityType
+Y
+“MLEG” must be set.
+
+40
+
+OrdType
+
+Y
+1 = Market
+2 = Limit
+
+
+
+44
+
+
+
+Price
+
+
+
+N
+The net price of the spread.
+This field is required for Limit orders. Debit (positive) is Willing To Pay Credit (negative) is Wants Cash Back
+0 for Even orders
+
+
+
+
+59
+
+
+
+
+TimeInForce
+
+
+
+
+N
+Specifies how long the order remains in effect. 0 = Day
+3 = Immediate or Cancel (IOC)
+5 = Day+ (extended trading hours)
+
+
+
+18
+
+
+
+ExecInst
+
+
+
+Y
+Instructions for order handling on exchange trading floor. If more than one instruction is applicable to an order, this field can contain multiple instructions separated by space.
+
+G = All or none - AON
+
+
+1
+
+
+Account
+
+
+Y
+Client account on DAS system. If there is default account configured, this tag is not required.
+Maximum 10 chars.
+
+
+100
+
+
+ExDestination
+
+
+N
+Execution destination as defined by institution when order is entered.
+If this tag is not defined, default route will be used.
+555
+NoLegs
+Y
+Should be same with original order
+
+
+
+654
+
+
+
+LegRefID
+
+
+
+Y
+This tag must be the first tag in each repeating group. Tag value must be digit, for example: 1,2,3,4 are valid; A,B,C,D are NOT valid.
+Execution report will use this value to specify which leg reported.
+
+600
+
+LegSymbol
+
+Y
+On EQUITY/STOCK legs: Equity Symbol
+On OPTION legs: Root Symbol
+608
+LegCFICode
+Y
+For Equity leg of Buy Write or other Multi-Leg order with stock component:
+ES: Equity Common Shares [CS]
+
+For Options:
+
+
+
+
+
+
+OC: Option-Call [OPT]
+OP: Option: Put [OPT]
+
+611
+
+LegMaturityDate
+
+N
+Options leg only
+
+YYYYMMDD
+
+612
+
+LegStrikePrice
+
+N
+Options leg only
+
+Strike price for an option
+
+623
+LegRatioQty
+Y
+The ratio of quantity for this individual leg relative to the entire multi-leg security. LegRatioQty x OrderQty
+
+
+624
+
+
+LegSide
+
+
+Y
+The valid values are:
+1: Buy
+2: Sell
+5: Sell Short
+
+
+564
+
+
+LegPositionEffect
+
+
+N
+Option legs only. The valid values are: O: Open
+C: Close
+
+
+565
+
+LegCoveredOrUncove red
+
+
+N
+Option legs only. The valid values are: 0: Covered
+1: Uncovered
+
+Trailer
+Yes
+
+
+
+	•	Complex (Multi-leg) Order Cancel Reject
+
+Multi-leg order cancel reject message is same as single order cancel reject.
+
+
+
+	•	Symbol Shortable Info
+
+If configured, DAS can send security shortable information to FIX client. This depends on client’s request.
+
+Tag
+Field
+Req'd
+Type
+Comments
+
+Header
+Y
+
+MsgType=s
+55
+Symbol
+Y
+String
+
+
+
+
+
+
+9200
+
+
+
+
+
+Flag
+
+
+
+
+
+Y
+
+
+
+
+
+DWORD
+0x1: Shortable 0x2: Marginable
+0x8: Shortable List 1 0x10: prohibited short flag,
+0x20: tick size pilot G123 group, 0.05 price increments
+
+
+
+9201
+Issue Market
+Y
+BYTE
+
+9202
+Short Size
+Y
+DWORD
+
+9203
+Yesterday Close Price
+Y
+double
+
+
+9204
+
+Long Margin Rate
+
+Y
+
+DWORD
+0= default; 100 means 100%, 60 means
+60% cash requirement.
+9205
+Short Margin Rate
+Y
+DWORD
+Same as Long Margin Rate.
+
+Trailer
+Y
+
+
+
+	•	Short Locate Quote Request
+
+Short locate quote request must be sent to short locate route. For DAS locate route type 0 or 2.
+
+Tag
+Field
+Req'd
+Type
+Comments
+
+Header
+Y
+
+MsgType=R
+
+
+131
+
+
+Unique identifier for quote request
+
+
+Y
+
+
+String
+In short locate quote response message (35=S), this tag will be returned. User should use this tag to identify which quote request being responded.
+55
+Symbol
+Y
+String
+
+38
+Qty
+Y
+INT
+Available locate shares to be queried
+1
+Account
+Y
+String
+Account initiating the request.
+
+100
+
+Locate Route
+
+Y
+
+String
+User must contact broker/DAS for locate route name.
+
+Trailer
+Y
+
+
+
+	•	Short Locate Quote Response
+
+For DAS locate route type 0 or 2.
+
+Tag
+Field
+Req'd
+Type
+Comments
+
+Header
+Y
+
+MsgType=S
+
+
+131
+
+
+Unique identifier for quote request
+
+
+Y
+
+
+String
+In short locate quote response message (35=S), this tag will be returned. User should use this tag to identify which quote request being responded.
+55
+Symbol
+Y
+String
+
+133
+OfferPx
+Y
+Price
+Offer Price per share.
+
+135
+
+OfferSize
+
+Y
+
+Qty
+Quantity of Offer. If <=0, means quote request failed or no available locate.
+58
+Text
+N
+String
+
+
+
+
+Trailer
+Y
+
+
+	•	Short Locate Accept/Reject offer
+
+For DAS locate route type 1.
+
+Tag
+Field
+Req'd
+Type
+Comments
+
+Header
+Y
+
+MsgType=p
+
+
+
+117
+
+
+
+Quote ID
+
+
+
+Y
+
+
+
+String
+QuoteID format: OrderID,1/0.
+Order ID is locate id returned in tag 37. Example:
+12,1 – accept the offer for locate 12. 15,0 – reject the offer for locate 15.
+
+Trailer
+Y
+
+
+
+	•	Short Locate New Order/Execution
+
+Short locate new order and execution uses the same FIX message tags with 3.1 New Order - Single and
+3.5 Execution Report (Single & Multi-leg) and there’re some limitations.
+
+For tag 39 OrdStatus, B = Calculated. For DAS, B is for locate route (wit route type 1), if locate is offered, 39=B.
+
+Tag
+Field
+Value
+Comments
+
+100
+
+Locate Route
+
+User must contact broker/DAS for locate route name. User can’t send a short locate new order to normal order route.
+54
+Side
+1
+Always BUY
+40
+OrdType
+
+OrdType will be ignored.
+59
+TimeInForce
+
+TimeInForce will be ignored.
