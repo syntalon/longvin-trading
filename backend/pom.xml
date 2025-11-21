@@ -60,7 +60,7 @@
         </dependency>
         <dependency>
             <groupId>org.quickfixj</groupId>
-            <artifactId>quickfixj-messages-fix44</artifactId>
+            <artifactId>quickfixj-messages-fix42</artifactId>
             <version>${quickfixj.version}</version>
         </dependency>
         <dependency>
