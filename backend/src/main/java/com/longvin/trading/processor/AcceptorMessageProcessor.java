@@ -1,5 +1,6 @@
 package com.longvin.trading.processor;
 
+import com.longvin.trading.config.FixClientProperties;
 import com.longvin.trading.service.DropCopyReplicationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,6 +17,7 @@ import quickfix.fix42.ExecutionReport;
 
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Message processor for the drop copy acceptor session.
@@ -27,21 +29,22 @@ public class AcceptorMessageProcessor implements FixMessageProcessor {
     
     private static final Logger log = LoggerFactory.getLogger(AcceptorMessageProcessor.class);
     
-    private static final String ACCEPTOR_SENDER_COMP_ID = "OS111";
-    private static final String ACCEPTOR_TARGET_COMP_ID = "DAST";
     private static final String FIX_VERSION = "FIX.4.2";
     
     private final DropCopyReplicationService replicationService;
+    private final FixClientProperties properties;
     
-    public AcceptorMessageProcessor(DropCopyReplicationService replicationService) {
+    public AcceptorMessageProcessor(DropCopyReplicationService replicationService,
+                                    FixClientProperties properties) {
         this.replicationService = Objects.requireNonNull(replicationService, "replicationService must not be null");
+        this.properties = Objects.requireNonNull(properties, "properties must not be null");
     }
     
     @Override
     public boolean handlesSession(SessionID sessionID) {
         return FIX_VERSION.equals(sessionID.getBeginString())
-            && ACCEPTOR_SENDER_COMP_ID.equals(sessionID.getSenderCompID())
-            && ACCEPTOR_TARGET_COMP_ID.equals(sessionID.getTargetCompID());
+            && properties.getDropCopySessionSenderCompId().equals(sessionID.getSenderCompID())
+            && properties.getDropCopySessionTargetCompId().equals(sessionID.getTargetCompID());
     }
     
     @Override
@@ -51,14 +54,31 @@ public class AcceptorMessageProcessor implements FixMessageProcessor {
             
             if ("A".equals(msgType)) {
                 // For acceptor: we're sending a Logon RESPONSE
-                // DO NOT modify the message - let QuickFIX/J handle it automatically
-                // QuickFIX/J will respond appropriately to the incoming Logon request
+                // DO NOT modify the message - let QuickFIX/J handle sequence number synchronization automatically
+                // QuickFIX/J will accept DAS Trader's sequence numbers and synchronize accordingly
                 int heartBtInt = -1;
                 if (message.isSetField(quickfix.field.HeartBtInt.FIELD)) {
                     heartBtInt = message.getInt(quickfix.field.HeartBtInt.FIELD);
                 }
-                log.info("Sending Logon response (acceptor session: {}): HeartBtInt={} seconds, message={}", 
-                    sessionID, heartBtInt, message);
+                int ourSeqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
+                boolean hasResetFlag = message.isSetField(quickfix.field.ResetSeqNumFlag.FIELD) 
+                    && message.getBoolean(quickfix.field.ResetSeqNumFlag.FIELD);
+                
+                // Log both our sender and expected target sequence numbers
+                try {
+                    quickfix.Session session = quickfix.Session.lookupSession(sessionID);
+                    if (session != null) {
+                        int expectedTargetSeqNum = session.getExpectedTargetNum();
+                        log.info("Sending Logon response (acceptor session: {}): ourSeqNum={}, expectedTargetSeqNum={}, HeartBtInt={} seconds, ResetSeqNumFlag={}, message={}", 
+                            sessionID, ourSeqNum, expectedTargetSeqNum, heartBtInt, hasResetFlag, message);
+                    } else {
+                        log.info("Sending Logon response (acceptor session: {}): seqNum={}, HeartBtInt={} seconds, ResetSeqNumFlag={}, message={}", 
+                            sessionID, ourSeqNum, heartBtInt, hasResetFlag, message);
+                    }
+                } catch (Exception e) {
+                    log.info("Sending Logon response (acceptor session: {}): seqNum={}, HeartBtInt={} seconds, ResetSeqNumFlag={}, message={}", 
+                        sessionID, ourSeqNum, heartBtInt, hasResetFlag, message);
+                }
                 // Return early - don't modify acceptor Logon responses
                 return;
             } else if ("5".equals(msgType)) {
@@ -86,8 +106,10 @@ public class AcceptorMessageProcessor implements FixMessageProcessor {
                 if (message.isSetField(quickfix.field.HeartBtInt.FIELD)) {
                     heartBtInt = message.getInt(quickfix.field.HeartBtInt.FIELD);
                 }
-                log.info("Received Logon request from DAS Trader (acceptor session: {}): seqNum={}, HeartBtInt={} seconds, message={}", 
-                    sessionID, seqNum, heartBtInt, message);
+                boolean hasResetFlag = message.isSetField(quickfix.field.ResetSeqNumFlag.FIELD) 
+                    && message.getBoolean(quickfix.field.ResetSeqNumFlag.FIELD);
+                log.info("Received Logon request from DAS Trader (acceptor session: {}): seqNum={}, HeartBtInt={} seconds, ResetSeqNumFlag={}, message={}", 
+                    sessionID, seqNum, heartBtInt, hasResetFlag, message);
             } else if ("5".equals(msgType)) {
                 String text = message.isSetField(quickfix.field.Text.FIELD) 
                     ? message.getString(quickfix.field.Text.FIELD) 
@@ -148,10 +170,10 @@ public class AcceptorMessageProcessor implements FixMessageProcessor {
                     }
                     
                     // Delegate replication to service
-                    // Find the initiator session (OS111->OPAL) to use for sending replicated orders
-                    SessionID initiatorSessionID = findInitiatorSession(shadowSessions);
-                    if (initiatorSessionID != null) {
-                        replicationService.processExecutionReport(report, sessionID, initiatorSessionID);
+                    // Find the initiator session to use for sending replicated orders
+                    Optional<SessionID> initiatorSessionOpt = findInitiatorSession(shadowSessions);
+                    if (initiatorSessionOpt.isPresent()) {
+                        replicationService.processExecutionReport(report, sessionID, initiatorSessionOpt.get());
                     } else {
                         log.warn("Initiator session not found; cannot replicate order. Available sessions: {}", shadowSessions.keySet());
                     }
@@ -166,18 +188,22 @@ public class AcceptorMessageProcessor implements FixMessageProcessor {
     
     /**
      * Find the initiator session to use for sending replicated orders.
-     * Looks for the session with SenderCompID=OS111 and TargetCompID=OPAL.
+     * Uses the primary session configuration to find the initiator session.
      */
-    private SessionID findInitiatorSession(Map<String, SessionID> allSessions) {
-        // Look for the initiator session (OS111->OPAL)
+    private Optional<SessionID> findInitiatorSession(Map<String, SessionID> allSessions) {
+        // Look for the initiator session using the primary session SenderCompID
+        String primarySenderCompId = properties.getPrimarySession();
         for (SessionID sessionID : allSessions.values()) {
-            if (ACCEPTOR_SENDER_COMP_ID.equals(sessionID.getSenderCompID()) 
-                && "OPAL".equals(sessionID.getTargetCompID())
+            if (primarySenderCompId.equals(sessionID.getSenderCompID()) 
                 && FIX_VERSION.equals(sessionID.getBeginString())) {
-                return sessionID;
+                // This should be the initiator session (not the acceptor)
+                // Acceptor sessions have TargetCompID=DAST, initiator has TargetCompID=OPAL
+                if (!properties.getDropCopySessionTargetCompId().equals(sessionID.getTargetCompID())) {
+                    return Optional.of(sessionID);
+                }
             }
         }
-        return null;
+        return Optional.empty();
     }
     
     /**

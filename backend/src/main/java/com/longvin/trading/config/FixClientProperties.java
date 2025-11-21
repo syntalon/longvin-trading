@@ -24,6 +24,10 @@ public class FixClientProperties {
     private final String configPath;
     @Getter
     private final String primarySession;
+    @Getter
+    private final String dropCopySessionSenderCompId;
+    @Getter
+    private final String dropCopySessionTargetCompId;
     private final String primaryAccount;
     @Getter
     private final Set<String> shadowSessions;
@@ -38,6 +42,8 @@ public class FixClientProperties {
             @DefaultValue("false") boolean enabled,
             @DefaultValue("classpath:fix/das-mirror-trading.cfg") String configPath,
             String primarySession,
+            @DefaultValue("OS111") String dropCopySessionSenderCompId,
+            @DefaultValue("DAST") String dropCopySessionTargetCompId,
             String primaryAccount,
             List<String> shadowSessions,
             Map<String, String> shadowAccounts,
@@ -46,6 +52,8 @@ public class FixClientProperties {
         this.enabled = enabled;
         this.configPath = Objects.requireNonNull(configPath, "configPath must not be null");
         this.primarySession = Objects.requireNonNull(primarySession, "primarySession must not be null");
+        this.dropCopySessionSenderCompId = Objects.requireNonNull(dropCopySessionSenderCompId, "dropCopySessionSenderCompId must not be null");
+        this.dropCopySessionTargetCompId = Objects.requireNonNull(dropCopySessionTargetCompId, "dropCopySessionTargetCompId must not be null");
         this.primaryAccount = primaryAccount == null || primaryAccount.isBlank() ? null : primaryAccount;
         this.shadowSessions = Collections.unmodifiableSet(
                 shadowSessions == null ? Set.of() : new LinkedHashSet<>(shadowSessions));

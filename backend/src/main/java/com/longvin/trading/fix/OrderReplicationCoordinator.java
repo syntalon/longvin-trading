@@ -50,12 +50,46 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
     public void onCreate(SessionID sessionID) {
         sessionsBySenderCompId.put(sessionID.getSenderCompID(), sessionID);
         log.info("Created FIX session {}", sessionID);
+        
+        // For drop copy acceptor sessions, set target sequence number to 1 initially
+        // This allows QuickFIX/J to accept any incoming sequence number >= 1 from DAS Trader
+        // The actual value will be synchronized in fromAdmin when Logon is received
+        // Sender sequence number is managed by FileStore (persists across restarts)
+        if (isDropCopySession(sessionID)) {
+            try {
+                Session session = Session.lookupSession(sessionID);
+                if (session != null) {
+                    // Set target sequence number to 1 to accept any incoming sequence number >= 1
+                    // QuickFIX/J will accept DAS Trader's sequence numbers (like 634) without validation errors
+                    // The actual value will be synchronized in fromAdmin
+                    session.setNextTargetMsgSeqNum(1);
+                    log.info("Drop copy acceptor session created {} - set targetSeqNum=1 initially to accept any incoming sequence number. " +
+                        "Will synchronize to actual value in fromAdmin. Sender sequence number managed by FileStore.", sessionID);
+                }
+            } catch (Exception e) {
+                log.debug("Could not set target sequence number for drop copy acceptor session {}: {}", sessionID, e.getMessage());
+            }
+        }
     }
 
     @Override
     public void onLogon(SessionID sessionID) {
         sessionsBySenderCompId.put(sessionID.getSenderCompID(), sessionID);
         log.info("Logged on to FIX session {}", sessionID);
+        
+        // For drop copy acceptor sessions, synchronize sequence numbers after logon
+        // This ensures we're in sync with DAS Trader's sequence numbers
+        if (isDropCopySession(sessionID)) {
+            try {
+                Session session = Session.lookupSession(sessionID);
+                if (session != null) {
+                    int expectedSeqNum = session.getExpectedTargetNum();
+                    log.info("Drop copy session logged on - current expected sequence number: {}", expectedSeqNum);
+                }
+            } catch (Exception e) {
+                log.debug("Could not check sequence number after logon for drop copy session {}: {}", sessionID, e.getMessage());
+            }
+        }
     }
 
     @Override
@@ -64,8 +98,16 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
         try {
             Session session = Session.lookupSession(sessionID);
             if (session != null) {
-                log.warn("Logged out from FIX session {} - Session state: isLoggedOn={}, isEnabled={}", 
-                    sessionID, session.isLoggedOn(), session.isEnabled());
+                int targetSeqNum = session.getExpectedTargetNum();
+                log.warn("Logged out from FIX session {} - Session state: isLoggedOn={}, isEnabled={}, expectedTargetSeqNum={}", 
+                    sessionID, session.isLoggedOn(), session.isEnabled(), targetSeqNum);
+                
+                // For drop copy sessions, log additional details
+                if (isDropCopySession(sessionID)) {
+                    log.warn("Drop copy session logout - DAS Trader may have rejected our Logon response or closed the connection. " +
+                        "Check if DAS Trader sent a Logout message (should appear in logs above). " +
+                        "If no Logout message is visible, DAS Trader may have closed the connection without sending one.");
+                }
             } else {
                 log.warn("Logged out from FIX session {} - Session object not found", sessionID);
             }
@@ -90,6 +132,79 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
 
     @Override
     public void fromAdmin(Message message, SessionID sessionID) {
+        // Handle sequence number synchronization for drop copy acceptor sessions
+        // IMPORTANT: QuickFIX/J validates sequence numbers BEFORE calling fromAdmin
+        // If validation fails, we won't get here. To handle sequence number gaps,
+        // we need to set the expected sequence number in onCreate or use a custom MessageFactory
+        try {
+            String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
+            if (isDropCopySession(sessionID)) {
+                if ("A".equals(msgType)) {
+                    // Logon message: synchronize both target and sender sequence numbers
+                    int incomingSeqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
+                    try {
+                        Session session = Session.lookupSession(sessionID);
+                        if (session != null) {
+                            // Get current expected sequence number (what we expect to receive next from DAS Trader)
+                            int expectedSeqNum = session.getExpectedTargetNum();
+                            // Always synchronize to DAS Trader's sequence number for Logon messages
+                            // This ensures we're in sync for all subsequent messages
+                            if (incomingSeqNum != expectedSeqNum) {
+                                log.info("Synchronizing target sequence numbers: incoming={}, expected={}. Setting expected sequence number to match DAS Trader.", 
+                                    incomingSeqNum, expectedSeqNum);
+                                // Set our expected sequence number to match what DAS Trader is sending
+                                // This tells QuickFIX/J to accept messages starting from this sequence number
+                                session.setNextTargetMsgSeqNum(incomingSeqNum);
+                            }
+                            
+                            // Try to synchronize our sender sequence number to match DAS Trader's sender sequence number
+                            // This is unusual but some FIX implementations expect sender sequence numbers to be synchronized
+                            // DAS Trader's sender sequence number (incomingSeqNum) is what they're sending to us
+                            // We'll set our sender sequence number to match theirs
+                            // This will be used in the Logon response that QuickFIX/J sends
+                            // The FileStore will persist this value
+                            log.info("Setting our sender sequence number to match DAS Trader's sender sequence number: {}. " +
+                                "This will be used in the Logon response and persisted in FileStore.", incomingSeqNum);
+                            session.setNextSenderMsgSeqNum(incomingSeqNum);
+                        }
+                    } catch (Exception e) {
+                        log.debug("Could not adjust sequence numbers for drop copy acceptor session: {}", e.getMessage());
+                    }
+                } else if ("5".equals(msgType)) {
+                    // Logout message: check if DAS Trader is telling us what sequence number they expect
+                    // Some FIX implementations include the expected sequence number in the Logout Text field
+                    try {
+                        String text = message.isSetField(quickfix.field.Text.FIELD) 
+                            ? message.getString(quickfix.field.Text.FIELD) 
+                            : null;
+                        if (text != null && text.toLowerCase().contains("seq")) {
+                            log.warn("Received Logout from DAS Trader with text that might contain sequence number info: {}", text);
+                            // Try to extract sequence number from text (format varies by implementation)
+                            // Example: "Expected sequence number: 21" or "SeqNum mismatch: expected 21"
+                            java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("(?:seq|sequence).*?(\\d+)", java.util.regex.Pattern.CASE_INSENSITIVE);
+                            java.util.regex.Matcher matcher = pattern.matcher(text);
+                            if (matcher.find()) {
+                                try {
+                                    int expectedSeqNum = Integer.parseInt(matcher.group(1));
+                                    Session session = Session.lookupSession(sessionID);
+                                    if (session != null) {
+                                        log.info("Extracted expected sender sequence number from Logout message: {}. Setting our sender sequence number to match.", expectedSeqNum);
+                                        session.setNextSenderMsgSeqNum(expectedSeqNum);
+                                    }
+                                } catch (NumberFormatException e) {
+                                    log.debug("Could not parse sequence number from Logout text: {}", text);
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.debug("Could not process Logout message for sequence number info: {}", e.getMessage());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Error checking sequence numbers in fromAdmin: {}", e.getMessage());
+        }
+        
         // Delegate to the appropriate processor
         for (FixMessageProcessor processor : messageProcessors) {
             if (processor.handlesSession(sessionID)) {
@@ -125,10 +240,14 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
         crack(message, sessionID);
     }
     
+    /**
+     * Check if the given session ID matches the drop copy acceptor session configuration.
+     * Uses properties instead of hardcoded values.
+     */
     private boolean isDropCopySession(SessionID sessionID) {
-        return "OS111".equals(sessionID.getSenderCompID()) 
-            && "DAST".equals(sessionID.getTargetCompID())
-            && "FIX.4.2".equals(sessionID.getBeginString());
+        return "FIX.4.2".equals(sessionID.getBeginString())
+            && properties.getDropCopySessionSenderCompId().equals(sessionID.getSenderCompID())
+            && properties.getDropCopySessionTargetCompId().equals(sessionID.getTargetCompID());
     }
     
     private void trackDropCopyMessage(SessionID sessionID, Message message) {

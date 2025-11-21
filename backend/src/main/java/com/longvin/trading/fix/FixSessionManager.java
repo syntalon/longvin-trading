@@ -23,6 +23,7 @@ import org.springframework.stereotype.Component;
 import quickfix.ConfigError;
 import quickfix.DefaultMessageFactory;
 import quickfix.Dictionary;
+import quickfix.FileStoreFactory;
 import quickfix.MemoryStoreFactory;
 import quickfix.MessageFactory;
 import quickfix.MessageStoreFactory;
@@ -68,11 +69,13 @@ public class FixSessionManager implements SmartLifecycle {
                 MessageFactory messageFactory = new DefaultMessageFactory();
 
                 if (hasSessions(acceptorSettings)) {
-                    MessageStoreFactory storeFactory = new MemoryStoreFactory();
+                    // Use FileStoreFactory for acceptor sessions so sequence numbers persist
+                    // This ensures our sender sequence numbers match what DAS Trader expects
+                    MessageStoreFactory storeFactory = new FileStoreFactory(acceptorSettings);
                     acceptor = new SocketAcceptor(application, storeFactory, acceptorSettings, null, messageFactory);
                     acceptor.start();
                     startedSomething = true;
-                    log.info("FIX acceptor started for drop-copy sessions: {}", describeSessions(acceptorSettings));
+                    log.info("FIX acceptor started for drop-copy sessions (using FileStore for sequence number persistence): {}", describeSessions(acceptorSettings));
                 }
 
                 if (hasSessions(initiatorSettings)) {
