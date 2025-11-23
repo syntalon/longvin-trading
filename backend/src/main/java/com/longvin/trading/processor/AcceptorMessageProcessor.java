@@ -48,6 +48,12 @@ public class AcceptorMessageProcessor implements FixMessageProcessor {
     }
     
     @Override
+    public boolean handlesSession(SessionID sessionID, String connectionType) {
+        // Acceptor processor handles acceptor sessions
+        return "acceptor".equalsIgnoreCase(connectionType);
+    }
+    
+    @Override
     public void processOutgoingAdmin(Message message, SessionID sessionID) {
         try {
             String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);

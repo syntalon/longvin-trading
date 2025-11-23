@@ -26,6 +26,7 @@
     <modules>
         <module>ui</module>
         <module>backend</module>
+        <module>simulator</module>
     </modules>
 </project>
 

@@ -1,0 +1,70 @@
+# Default configuration (used when no profile is specified)
+# This acts as the production configuration
+spring:
+  application:
+    name: LongvinTradingBackend
+
+server:
+  port: 8081
+
+logging:
+  file:
+    name: logs/application.log
+    max-size: 10MB
+    max-history: 30
+  level:
+    quickfix: DEBUG
+    quickfix.mina: DEBUG
+    com.longvin.trading.fix: DEBUG
+
+trading:
+  fix:
+    enabled: true
+    config-path: classpath:fix/das-mirror-trading.cfg
+    primary-session: OS111
+    drop-copy-session-sender-comp-id: OS111
+    drop-copy-session-target-comp-id: DAST
+    primary-account: PRIMARY_ACCOUNT
+    shadow-sessions: SHADOW1,SHADOW2
+    shadow-accounts:
+      SHADOW1: SHADOW_ACCOUNT_1
+      SHADOW2: SHADOW_ACCOUNT_2
+    cl-ord-id-prefix: MIRROR-
+
+---
+# Test profile configuration
+# Use this profile for testing with the simulator
+# Run with: --spring.profiles.active=test
+spring:
+  config:
+    activate:
+      on-profile: test
+
+trading:
+  fix:
+    # Override config to use test configuration pointing to simulator
+    config-path: classpath:fix/das-mirror-trading-test.cfg
+
+logging:
+  level:
+    com.longvin.trading: DEBUG
+
+---
+# Production profile configuration
+# This is the default profile for production use
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+trading:
+  fix:
+    # Production FIX config (explicit, though already default)
+    config-path: classpath:fix/das-mirror-trading.cfg
+
+logging:
+  level:
+    com.longvin.trading: INFO
+    quickfix: INFO
+    quickfix.mina: WARN
+

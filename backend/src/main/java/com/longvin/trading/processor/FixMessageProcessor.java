@@ -57,5 +57,16 @@ public interface FixMessageProcessor {
      * @return true if this processor handles this session
      */
     boolean handlesSession(SessionID sessionID);
+    
+    /**
+     * Check if this processor handles the given session based on connection type.
+     * @param sessionID The session ID to check
+     * @param connectionType The connection type ("acceptor" or "initiator")
+     * @return true if this processor handles the session
+     */
+    default boolean handlesSession(SessionID sessionID, String connectionType) {
+        // Default implementation falls back to the original method
+        return handlesSession(sessionID);
+    }
 }
 
