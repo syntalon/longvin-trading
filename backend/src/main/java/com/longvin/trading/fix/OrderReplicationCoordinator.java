@@ -469,6 +469,15 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
         }
     }
 
+    /**
+     * Get the SessionID for a given senderCompId.
+     * @param senderCompId the FIX SenderCompID
+     * @return Optional containing the SessionID if found and logged on, empty otherwise
+     */
+    public Optional<SessionID> getSessionIdForSenderCompId(String senderCompId) {
+        return Optional.ofNullable(sessionsBySenderCompId.get(senderCompId));
+    }
+
 
     /**
      * Represents a message received from the drop copy session.

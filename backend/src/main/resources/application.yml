@@ -30,25 +30,6 @@ trading:
       SHADOW1: SHADOW_ACCOUNT_1
       SHADOW2: SHADOW_ACCOUNT_2
     cl-ord-id-prefix: MIRROR-
-
----
-# Test profile configuration
-# Use this profile for testing with the simulator
-# Run with: --spring.profiles.active=test
-spring:
-  config:
-    activate:
-      on-profile: test
-
-trading:
-  fix:
-    # Override config to use test configuration pointing to simulator
-    config-path: classpath:fix/das-mirror-trading-test.cfg
-
-logging:
-  level:
-    com.longvin.trading: DEBUG
-
 ---
 # Production profile configuration
 # This is the default profile for production use
@@ -68,3 +49,42 @@ logging:
     quickfix: INFO
     quickfix.mina: WARN
 
+---
+# Test profile configuration
+# Use this profile for testing with the simulator
+# Run with: --spring.profiles.active=test
+spring:
+  config:
+    activate:
+      on-profile: simulator
+
+trading:
+  fix:
+    # Override config to use test configuration pointing to simulator
+    config-path: classpath:fix/das-mirror-trading-test.cfg
+
+logging:
+  level:
+    com.longvin.trading: DEBUG
+
+---
+# Dev profile configuration
+spring:
+  config:
+    activate:
+      on-profile: dev
+
+trading:
+  fix:
+    # Dev FIX config pointing to DAS Trader dev environment
+    config-path: classpath:fix/das-mirror-trading-dev.cfg
+
+logging:
+  level:
+    com.longvin.trading: DEBUG
+    quickfix: DEBUG
+    quickfix.mina: DEBUG
+    quickfix.mina.initiator: TRACE
+    quickfix.mina.acceptor: DEBUG
+    com.longvin.trading.processor: DEBUG
+    org.apache.mina: DEBUG
