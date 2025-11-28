@@ -16,13 +16,18 @@ public class SimulatorProperties {
     @Getter
     private final InitiatorConfig initiator;
 
+    @Getter
+    private final boolean guiEnabled;
+
     public SimulatorProperties(
             @DefaultValue("true") boolean enabled,
             AcceptorConfig acceptor,
-            InitiatorConfig initiator) {
+            InitiatorConfig initiator,
+            @DefaultValue("true") boolean guiEnabled) {
         this.enabled = enabled;
         this.acceptor = acceptor != null ? acceptor : new AcceptorConfig(true, 8661, "OPAL", "OS111");
         this.initiator = initiator != null ? initiator : new InitiatorConfig(true, "localhost", 9877, "DAST", "OS111", 30);
+        this.guiEnabled = guiEnabled;
     }
 
     public static class AcceptorConfig {
