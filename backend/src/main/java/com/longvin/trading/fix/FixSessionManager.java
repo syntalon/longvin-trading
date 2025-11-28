@@ -44,6 +44,7 @@ public class FixSessionManager implements SmartLifecycle {
     private final AtomicBoolean running = new AtomicBoolean(false);
     private SocketInitiator initiator;
     private SocketAcceptor acceptor;
+    private final AtomicBoolean initiatorPaused = new AtomicBoolean(false);
 
     public FixSessionManager(OrderReplicationCoordinator application,
                              FixClientProperties properties,
@@ -114,12 +115,51 @@ public class FixSessionManager implements SmartLifecycle {
         }
     }
 
+    public void pauseInitiator(String reason) {
+        if (initiator == null) {
+            log.warn("Cannot pause initiator: initiator is null");
+            return;
+        }
+        if (initiatorPaused.compareAndSet(false, true)) {
+            log.warn("Pausing FIX initiator: {} - calling initiator.stop() to prevent reconnection attempts", reason);
+            try {
+                initiator.stop();
+                log.info("FIX initiator paused successfully - it will NOT attempt to reconnect until resumeInitiatorIfPaused() is called");
+            } catch (Exception e) {
+                log.warn("Error while pausing FIX initiator: {}", e.getMessage());
+                initiatorPaused.set(false);
+            }
+        } else {
+            log.debug("Initiator pause requested but initiator is already paused");
+        }
+    }
+
+    public void resumeInitiatorIfPaused() {
+        if (initiator == null) {
+            log.warn("Cannot resume initiator: initiator is null");
+            return;
+        }
+        if (initiatorPaused.compareAndSet(true, false)) {
+            try {
+                log.info("Resuming FIX initiator after pause - calling initiator.start()");
+                initiator.start();
+                log.info("FIX initiator resumed successfully - it will now attempt to reconnect automatically");
+            } catch (ConfigError | RuntimeError e) {
+                initiatorPaused.set(true);
+                log.error("Unable to resume FIX initiator", e);
+            }
+        } else {
+            log.debug("Initiator resume requested but initiator is not paused (current state: paused={})", initiatorPaused.get());
+        }
+    }
+
     @Override
     public void stop() {
         if (running.compareAndSet(true, false)) {
             if (initiator != null) {
                 log.info("Stopping FIX initiator");
                 initiator.stop();
+                initiatorPaused.set(false);
             }
             if (acceptor != null) {
                 log.info("Stopping FIX acceptor");

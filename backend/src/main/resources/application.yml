@@ -8,6 +8,17 @@ spring:
     driver-class-name: org.h2.Driver
     username: sa
     password:
+    hikari:
+      # Connection pool settings
+      minimum-idle: 2
+      maximum-pool-size: 10
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      # Housekeeper runs every 30 seconds by default
+      # Increase the threshold for thread starvation detection to reduce false positives
+      # This is a HikariCP internal setting - we can't directly configure it,
+      # but ensuring adequate thread pool sizes helps
   h2:
     console:
       enabled: true
@@ -35,6 +46,8 @@ logging:
     com.longvin.trading.fix: DEBUG
 
 trading:
+  initiator:
+    non-trading-resume-hour: 6
   fix:
     enabled: true
     config-path: classpath:fix/das-mirror-trading.cfg

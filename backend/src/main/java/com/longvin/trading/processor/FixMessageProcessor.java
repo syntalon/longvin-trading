@@ -1,5 +1,6 @@
 package com.longvin.trading.processor;
 
+import quickfix.DoNotSend;
 import quickfix.FieldNotFound;
 import quickfix.IncorrectTagValue;
 import quickfix.Message;
@@ -17,8 +18,9 @@ public interface FixMessageProcessor {
      * Process an outgoing admin message before it's sent.
      * @param message The message being sent
      * @param sessionID The session ID
+     * @throws DoNotSend if the message should not be sent
      */
-    void processOutgoingAdmin(Message message, SessionID sessionID);
+    void processOutgoingAdmin(Message message, SessionID sessionID) throws DoNotSend;
     
     /**
      * Process an incoming admin message after it's received.
@@ -37,7 +39,7 @@ public interface FixMessageProcessor {
      * @throws UnsupportedMessageType if the message type is not supported
      * @throws IncorrectTagValue if a field value is incorrect
      */
-    default void processIncomingApp(Message message, SessionID sessionID, Map<String, SessionID> shadowSessions) 
+    default void processIncomingApp(Message message, SessionID sessionID, Map<String, SessionID> shadowSessions)
             throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
         // Default: no-op, processors can override if needed
     }
@@ -65,7 +67,6 @@ public interface FixMessageProcessor {
      * @return true if this processor handles the session
      */
     default boolean handlesSession(SessionID sessionID, String connectionType) {
-        // Default implementation falls back to the original method
         return handlesSession(sessionID);
     }
 }

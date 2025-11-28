@@ -7,13 +7,13 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import com.longvin.trading.config.FixClientProperties;
 import com.longvin.trading.processor.FixMessageProcessor;
+import com.longvin.trading.processor.FixMessageProcessorFactory;
 import com.longvin.trading.service.OrderReplicationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import quickfix.Application;
-import quickfix.ConfigError;
 import quickfix.Dictionary;
 import quickfix.FieldConvertError;
 import quickfix.FieldNotFound;
@@ -28,6 +28,9 @@ import quickfix.fix42.ExecutionReport;
 import quickfix.fix42.MessageCracker;
 import quickfix.fix42.NewOrderSingle;
 
+/**
+ * The main QuickFIX/J Application implementation handling both initiator and acceptor sessions.
+ */
 @Component
 public class OrderReplicationCoordinator extends MessageCracker implements Application {
 
@@ -37,7 +40,7 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
     private final Map<String, SessionID> sessionsBySenderCompId = new ConcurrentHashMap<>();
     private final Map<SessionID, String> sessionConnectionTypes = new ConcurrentHashMap<>(); // SessionID -> "acceptor" or "initiator"
     private final OrderReplicationService orderReplicationService;
-    private final java.util.List<FixMessageProcessor> messageProcessors;
+    private final FixMessageProcessorFactory processorFactory;
     private volatile SessionSettings cachedSessionSettings; // Cache to avoid reloading
     
     // Track recent messages from drop copy session (last 100 messages)
@@ -46,10 +49,10 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
 
     public OrderReplicationCoordinator(FixClientProperties properties, 
                                       OrderReplicationService orderReplicationService,
-                                      java.util.List<FixMessageProcessor> messageProcessors) {
+                                      FixMessageProcessorFactory processorFactory) {
         this.properties = Objects.requireNonNull(properties, "properties must not be null");
         this.orderReplicationService = Objects.requireNonNull(orderReplicationService, "orderMirroringService must not be null");
-        this.messageProcessors = Objects.requireNonNull(messageProcessors, "messageProcessors must not be null");
+        this.processorFactory = Objects.requireNonNull(processorFactory, "processorFactory must not be null");
     }
 
     @Override
@@ -133,28 +136,30 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
 
     @Override
     public void toAdmin(Message message, SessionID sessionID) {
-        // Delegate to the appropriate processor based on connection type
         String connectionType = sessionConnectionTypes.get(sessionID);
-        if (connectionType != null) {
-            for (FixMessageProcessor processor : messageProcessors) {
-                boolean handles = processor.handlesSession(sessionID, connectionType);
-                if (handles) {
+        java.util.List<FixMessageProcessor> processors = connectionType != null
+            ? processorFactory.getProcessorsForSession(sessionID, connectionType)
+            : processorFactory.getProcessorsForSession(sessionID);
+        
+        for (FixMessageProcessor processor : processors) {
+            boolean handles = connectionType != null
+                ? processor.handlesSession(sessionID, connectionType)
+                : processor.handlesSession(sessionID);
+            
+            if (handles) {
+                try {
                     processor.processOutgoingAdmin(message, sessionID);
                     return;
-                }
-            }
-        } else {
-            // Fallback to old method if connection type not determined
-            log.debug("Connection type not determined for session {}, using CompID-based matching", sessionID);
-            for (FixMessageProcessor processor : messageProcessors) {
-                boolean handles = processor.handlesSession(sessionID);
-                if (handles) {
-                    processor.processOutgoingAdmin(message, sessionID);
+                } catch (quickfix.DoNotSend e) {
+                    // Re-throw DoNotSend wrapped in RuntimeException since Application.toAdmin doesn't declare it
+                    // QuickFIX/J framework will catch and handle it
+                    throw new RuntimeException("DoNotSend", e);
+                } catch (Exception e) {
+                    log.debug("Error in processor {} for session {}: {}", processor.getClass().getSimpleName(), sessionID, e.getMessage());
                     return;
                 }
             }
         }
-        // If no processor handles this session, log a warning
         log.debug("No processor found for session {} (connection type: {}), using default handling", sessionID, connectionType);
     }
 
@@ -235,26 +240,20 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
         
         // Delegate to the appropriate processor based on connection type
         String connectionType = sessionConnectionTypes.get(sessionID);
-        if (connectionType != null) {
-            for (FixMessageProcessor processor : messageProcessors) {
-                boolean handles = processor.handlesSession(sessionID, connectionType);
-                if (handles) {
-                    processor.processIncomingAdmin(message, sessionID);
-                    return;
-                }
-            }
-        } else {
-            // Fallback to old method if connection type not determined
-            log.debug("Connection type not determined for session {}, using CompID-based matching", sessionID);
-            for (FixMessageProcessor processor : messageProcessors) {
-                boolean handles = processor.handlesSession(sessionID);
-                if (handles) {
-                    processor.processIncomingAdmin(message, sessionID);
-                    return;
-                }
+        java.util.List<FixMessageProcessor> processors = connectionType != null
+            ? processorFactory.getProcessorsForSession(sessionID, connectionType)
+            : processorFactory.getProcessorsForSession(sessionID);
+        
+        for (FixMessageProcessor processor : processors) {
+            boolean handles = connectionType != null
+                ? processor.handlesSession(sessionID, connectionType)
+                : processor.handlesSession(sessionID);
+            
+            if (handles) {
+                processor.processIncomingAdmin(message, sessionID);
+                return;
             }
         }
-        // If no processor handles this session, log a warning
         log.debug("No processor found for session {} (connection type: {}), using default handling", sessionID, connectionType);
     }
 
@@ -267,30 +266,23 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
     public void fromApp(Message message, SessionID sessionID) throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
         // Delegate to the appropriate processor based on connection type
         String connectionType = sessionConnectionTypes.get(sessionID);
-        if (connectionType != null) {
-            for (FixMessageProcessor processor : messageProcessors) {
-                if (processor.handlesSession(sessionID, connectionType)) {
-                    processor.processIncomingApp(message, sessionID, sessionsBySenderCompId);
-                    
-                    // Track the message for drop copy session (for REST API)
-                    if (isDropCopySession(sessionID)) {
-                        trackDropCopyMessage(sessionID, message);
-                    }
-                    break;
+        java.util.List<FixMessageProcessor> processors = connectionType != null
+            ? processorFactory.getProcessorsForSession(sessionID, connectionType)
+            : processorFactory.getProcessorsForSession(sessionID);
+        
+        for (FixMessageProcessor processor : processors) {
+            boolean handles = connectionType != null
+                ? processor.handlesSession(sessionID, connectionType)
+                : processor.handlesSession(sessionID);
+            
+            if (handles) {
+                processor.processIncomingApp(message, sessionID, sessionsBySenderCompId);
+                
+                // Track the message for drop copy session (for REST API)
+                if (isDropCopySession(sessionID)) {
+                    trackDropCopyMessage(sessionID, message);
                 }
-            }
-        } else {
-            // Fallback to old method if connection type not determined
-            for (FixMessageProcessor processor : messageProcessors) {
-                if (processor.handlesSession(sessionID)) {
-                    processor.processIncomingApp(message, sessionID, sessionsBySenderCompId);
-                    
-                    // Track the message for drop copy session (for REST API)
-                    if (isDropCopySession(sessionID)) {
-                        trackDropCopyMessage(sessionID, message);
-                    }
-                    break;
-                }
+                break;
             }
         }
         

@@ -1,10 +1,10 @@
-package com.longvin.trading.processor;
+package com.longvin.trading.processor.impl;
 
 import com.longvin.trading.config.FixClientProperties;
+import com.longvin.trading.processor.FixMessageProcessor;
 import com.longvin.trading.service.DropCopyReplicationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 import quickfix.FieldNotFound;
 import quickfix.IncorrectTagValue;
 import quickfix.Message;
@@ -23,8 +23,8 @@ import java.util.Optional;
  * Message processor for the drop copy acceptor session.
  * Handles messages from DAS Trader (initiator) connecting to us.
  * When ExecutionReports are received, delegates replication to DropCopyReplicationService.
+ * This is a stateless POJO created by FixMessageProcessorFactory.
  */
-@Component
 public class AcceptorMessageProcessor implements FixMessageProcessor {
     
     private static final Logger log = LoggerFactory.getLogger(AcceptorMessageProcessor.class);
@@ -54,7 +54,7 @@ public class AcceptorMessageProcessor implements FixMessageProcessor {
     }
     
     @Override
-    public void processOutgoingAdmin(Message message, SessionID sessionID) {
+    public void processOutgoingAdmin(Message message, SessionID sessionID) throws quickfix.DoNotSend {
         try {
             String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
             
@@ -67,7 +67,7 @@ public class AcceptorMessageProcessor implements FixMessageProcessor {
                     heartBtInt = message.getInt(quickfix.field.HeartBtInt.FIELD);
                 }
                 int ourSeqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
-                boolean hasResetFlag = message.isSetField(quickfix.field.ResetSeqNumFlag.FIELD) 
+                boolean hasResetFlag = message.isSetField(quickfix.field.ResetSeqNumFlag.FIELD)
                     && message.getBoolean(quickfix.field.ResetSeqNumFlag.FIELD);
                 
                 // Log both our sender and expected target sequence numbers
@@ -82,8 +82,9 @@ public class AcceptorMessageProcessor implements FixMessageProcessor {
                             sessionID, ourSeqNum, heartBtInt, hasResetFlag, message);
                     }
                 } catch (Exception e) {
-                    log.info("Sending Logon response (acceptor session: {}): seqNum={}, HeartBtInt={} seconds, ResetSeqNumFlag={}, message={}", 
+                    log.info("Sending Logon response (acceptor session: {}): seqNum={}, HeartBtInt={} seconds, ResetSeqNumFlag={}, message={}",
                         sessionID, ourSeqNum, heartBtInt, hasResetFlag, message);
+                    log.debug("Error getting session details for logging: {}", e.getMessage());
                 }
                 // Return early - don't modify acceptor Logon responses
                 return;
@@ -148,7 +149,7 @@ public class AcceptorMessageProcessor implements FixMessageProcessor {
     }
     
     @Override
-    public void processIncomingApp(Message message, SessionID sessionID, Map<String, SessionID> shadowSessions) 
+    public void processIncomingApp(Message message, SessionID sessionID, Map<String, SessionID> shadowSessions)
             throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
         try {
             String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
@@ -175,46 +176,30 @@ public class AcceptorMessageProcessor implements FixMessageProcessor {
                             execType, execId, orderId, symbol);
                     }
                     
-                    // Delegate replication to service
-                    // Find the initiator session to use for sending replicated orders
-                    Optional<SessionID> initiatorSessionOpt = findInitiatorSession(shadowSessions);
-                    if (initiatorSessionOpt.isPresent()) {
-                        replicationService.processExecutionReport(report, sessionID, initiatorSessionOpt.get());
+                    Optional<SessionID> initiatorSession = findInitiatorSession(sessionID, shadowSessions);
+                    if (initiatorSession.isPresent()) {
+                        replicationService.processExecutionReport(report, sessionID, initiatorSession.get());
                     } else {
-                        log.warn("Initiator session not found; cannot replicate order. Available sessions: {}", shadowSessions.keySet());
+                        log.warn("No initiator session found to replicate ExecutionReport for session {}", sessionID);
                     }
-                } catch (Exception e) {
-                    log.warn("Error processing ExecutionReport: {}", e.getMessage(), e);
+                } catch (ClassCastException e) {
+                    log.warn("Received message marked as ExecutionReport but unable to cast. Message: {}", message, e);
                 }
             }
         } catch (Exception e) {
-            log.warn("Error processing drop copy message header: {}", e.getMessage());
+            log.error("Error processing drop copy application message: {}", e.getMessage(), e);
         }
     }
     
-    /**
-     * Find the initiator session to use for sending replicated orders.
-     * Uses the primary session configuration to find the initiator session.
-     */
-    private Optional<SessionID> findInitiatorSession(Map<String, SessionID> allSessions) {
-        // Look for the initiator session using the primary session SenderCompID
-        String primarySenderCompId = properties.getPrimarySession();
-        for (SessionID sessionID : allSessions.values()) {
-            if (primarySenderCompId.equals(sessionID.getSenderCompID()) 
-                && FIX_VERSION.equals(sessionID.getBeginString())) {
-                // This should be the initiator session (not the acceptor)
-                // Acceptor sessions have TargetCompID=DAST, initiator has TargetCompID=OPAL
-                if (!properties.getDropCopySessionTargetCompId().equals(sessionID.getTargetCompID())) {
-                    return Optional.of(sessionID);
-                }
-            }
-        }
-        return Optional.empty();
+    @Override
+    public void processOutgoingApp(Message message, SessionID sessionID) {
+        // Logging for outgoing application messages (if any) can be added here when needed
     }
     
-    /**
-     * Get human-readable name for FIX message type.
-     */
+    private Optional<SessionID> findInitiatorSession(SessionID dropCopySessionID, Map<String, SessionID> shadowSessions) {
+        return Optional.ofNullable(shadowSessions.get(properties.getPrimarySession()));
+    }
+    
     private String getMsgTypeName(String msgType) {
         return switch (msgType) {
             case "0" -> "Heartbeat";
@@ -223,12 +208,8 @@ public class AcceptorMessageProcessor implements FixMessageProcessor {
             case "3" -> "Reject";
             case "4" -> "SequenceReset";
             case "5" -> "Logout";
-            case "A" -> "Logon";
-            case "D" -> "NewOrderSingle";
             case "8" -> "ExecutionReport";
-            case "F" -> "OrderCancelRequest";
-            case "G" -> "OrderCancelReplaceRequest";
-            default -> "Unknown(" + msgType + ")";
+            default -> "Unknown (" + msgType + ")";
         };
     }
 }
