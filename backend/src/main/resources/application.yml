@@ -125,7 +125,7 @@ spring:
 trading:
   fix:
     # Override config to use test configuration pointing to simulator
-    config-path: classpath:fix/das-mirror-trading-test.cfg
+    config-path: classpath:fix/das-mirror-trading-simulator.cfg
 
 logging:
   level:
