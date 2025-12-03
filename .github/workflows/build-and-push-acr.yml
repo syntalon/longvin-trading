@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 env:
-  REGISTRY: ${{ secrets.ACR_REGISTRY }}
+  REGISTRY: syntaloneu-ejdfabeyb9b7buha.azurecr.io
   IMAGE_NAME: longvin-trading-backend
 
 permissions:
