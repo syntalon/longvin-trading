@@ -67,21 +67,48 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Validate ACR Registry
+        run: |
+          if [ -z "${{ env.REGISTRY }}" ]; then
+            echo "❌ Error: ACR_REGISTRY secret is not set"
+            echo "Please add ACR_REGISTRY secret to your repository settings"
+            exit 1
+          fi
+          echo "✅ Registry: ${{ env.REGISTRY }}"
+
       - name: Get ACR login server name
         id: get-acr-name
         run: |
           # Extract registry name from full URL (e.g., myregistry.azurecr.io -> myregistry)
           ACR_NAME=$(echo "${{ env.REGISTRY }}" | sed 's/\.azurecr\.io//')
+          if [ -z "$ACR_NAME" ]; then
+            echo "❌ Error: Could not extract ACR name from registry URL: ${{ env.REGISTRY }}"
+            echo "Registry should be in format: myregistry.azurecr.io"
+            exit 1
+          fi
           echo "acr_name=$ACR_NAME" >> $GITHUB_OUTPUT
-          echo "ACR Name: $ACR_NAME"
+          echo "✅ ACR Name: $ACR_NAME"
 
       - name: Log in to Azure Container Registry
         run: |
           ACR_NAME=${{ steps.get-acr-name.outputs.acr_name }}
+          REGISTRY_URL="${{ env.REGISTRY }}"
+          
           # Get ACR access token using current Azure CLI session (OIDC authenticated)
-          ACR_TOKEN=$(az account get-access-token --resource https://$ACR_NAME.azurecr.io --query accessToken -o tsv)
+          # Try --scope first (newer Azure CLI), fallback to --resource (older versions)
+          ACR_TOKEN=$(az account get-access-token --scope https://$ACR_NAME.azurecr.io/.default --query accessToken -o tsv 2>/dev/null || \
+                      az account get-access-token --resource https://$ACR_NAME.azurecr.io --query accessToken -o tsv)
+          
+          if [ -z "$ACR_TOKEN" ]; then
+            echo "❌ Error: Failed to get ACR access token"
+            echo "Please verify that the service principal has permissions to access ACR"
+            exit 1
+          fi
+          
           # Login to Docker using the token (username must be 00000000-0000-0000-0000-000000000000 for token auth)
-          echo "$ACR_TOKEN" | docker login ${{ env.REGISTRY }} --username 00000000-0000-0000-0000-000000000000 --password-stdin
+          echo "$ACR_TOKEN" | docker login $REGISTRY_URL --username 00000000-0000-0000-0000-000000000000 --password-stdin
+          
+          echo "✅ Successfully logged in to ACR: $REGISTRY_URL"
 
       - name: Find backend JAR file
         id: backend-jar
