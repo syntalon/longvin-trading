@@ -12,9 +12,12 @@ on:
   workflow_dispatch:
 
 env:
-  ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
-  ACR_REPOSITORY_BACKEND: longvin-trading-backend
-  IMAGE_TAG: ${{ github.sha }}
+  REGISTRY: ${{ secrets.ACR_REGISTRY }}
+  IMAGE_NAME: longvin-trading-backend
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   build-and-push:
@@ -54,10 +57,20 @@ jobs:
         run: |
           mvn clean package -DskipTests -pl backend -am
 
-      - name: Log in to Azure Container Registry
-        uses: azure/docker-login@v1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Azure
+        uses: azure/login@v2
         with:
-          login-server: ${{ secrets.ACR_REGISTRY }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to Azure Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
           username: ${{ secrets.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
 
@@ -69,12 +82,15 @@ jobs:
           echo "Found JAR: $JAR_FILE"
 
       - name: Build and push backend image (with UI bundled)
-        run: |
-          docker build -t ${{ env.ACR_REGISTRY }}/${{ env.ACR_REPOSITORY_BACKEND }}:${{ env.IMAGE_TAG }} \
-                       -t ${{ env.ACR_REGISTRY }}/${{ env.ACR_REPOSITORY_BACKEND }}:latest \
-                       -f backend/Dockerfile \
-                       --build-arg JAR_FILE=${{ steps.backend-jar.outputs.jar_file }} \
-                       .
-          docker push ${{ env.ACR_REGISTRY }}/${{ env.ACR_REPOSITORY_BACKEND }}:${{ env.IMAGE_TAG }}
-          docker push ${{ env.ACR_REGISTRY }}/${{ env.ACR_REPOSITORY_BACKEND }}:latest
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: true
+          build-args: |
+            JAR_FILE=${{ steps.backend-jar.outputs.jar_file }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          platforms: linux/amd64
 
