@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 env:
-  REGISTRY: syntaloneu-ejdfabeyb9b7buha.azurecr.io
+  REGISTRY: ${{ secrets.ACR_REGISTRY }}
   IMAGE_NAME: longvin-trading-backend
 
 permissions:
@@ -20,8 +20,58 @@ permissions:
   contents: read
 
 jobs:
+  validate-secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check required secrets
+        run: |
+          echo "🔍 Checking required secrets..."
+          
+          # Check Azure OIDC secrets
+          if [ -z "${{ secrets.AZURE_CLIENT_ID }}" ]; then
+            echo "❌ AZURE_CLIENT_ID is not set"
+            exit 1
+          fi
+          
+          if [ -z "${{ secrets.AZURE_TENANT_ID }}" ]; then
+            echo "❌ AZURE_TENANT_ID is not set"
+            exit 1
+          fi
+          
+          if [ -z "${{ secrets.AZURE_SUBSCRIPTION_ID }}" ]; then
+            echo "❌ AZURE_SUBSCRIPTION_ID is not set"
+            exit 1
+          fi
+          
+          # Check ACR credentials
+          if [ -z "${{ secrets.ACR_REGISTRY }}" ]; then
+            echo "❌ ACR_REGISTRY is not set"
+            exit 1
+          fi
+          
+          if [ -z "${{ secrets.ACR_USERNAME }}" ]; then
+            echo "❌ ACR_USERNAME is not set"
+            exit 1
+          fi
+          
+          if [ -z "${{ secrets.ACR_PASSWORD }}" ]; then
+            echo "❌ ACR_PASSWORD is not set"
+            exit 1
+          fi
+          
+          echo "✅ All required secrets are configured"
+          
+          # Display configuration info
+          echo ""
+          echo "📋 Configuration Summary:"
+          echo "Registry: ${{ env.REGISTRY }}"
+          echo "Image: ${{ env.IMAGE_NAME }}"
+          echo "Azure Tenant: ${{ secrets.AZURE_TENANT_ID }}"
+          echo "Azure Subscription: ${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+
   build-and-push:
     runs-on: ubuntu-latest
+    needs: validate-secrets
     
     steps:
       - name: Checkout code
@@ -67,48 +117,12 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Validate ACR Registry
-        run: |
-          if [ -z "${{ env.REGISTRY }}" ]; then
-            echo "❌ Error: ACR_REGISTRY secret is not set"
-            echo "Please add ACR_REGISTRY secret to your repository settings"
-            exit 1
-          fi
-          echo "✅ Registry: ${{ env.REGISTRY }}"
-
-      - name: Get ACR login server name
-        id: get-acr-name
-        run: |
-          # Extract registry name from full URL (e.g., myregistry.azurecr.io -> myregistry)
-          ACR_NAME=$(echo "${{ env.REGISTRY }}" | sed 's/\.azurecr\.io//')
-          if [ -z "$ACR_NAME" ]; then
-            echo "❌ Error: Could not extract ACR name from registry URL: ${{ env.REGISTRY }}"
-            echo "Registry should be in format: myregistry.azurecr.io"
-            exit 1
-          fi
-          echo "acr_name=$ACR_NAME" >> $GITHUB_OUTPUT
-          echo "✅ ACR Name: $ACR_NAME"
-
       - name: Log in to Azure Container Registry
-        run: |
-          ACR_NAME=${{ steps.get-acr-name.outputs.acr_name }}
-          REGISTRY_URL="${{ env.REGISTRY }}"
-          
-          # Get ACR access token using current Azure CLI session (OIDC authenticated)
-          # Try --scope first (newer Azure CLI), fallback to --resource (older versions)
-          ACR_TOKEN=$(az account get-access-token --scope https://$ACR_NAME.azurecr.io/.default --query accessToken -o tsv 2>/dev/null || \
-                      az account get-access-token --resource https://$ACR_NAME.azurecr.io --query accessToken -o tsv)
-          
-          if [ -z "$ACR_TOKEN" ]; then
-            echo "❌ Error: Failed to get ACR access token"
-            echo "Please verify that the service principal has permissions to access ACR"
-            exit 1
-          fi
-          
-          # Login to Docker using the token (username must be 00000000-0000-0000-0000-000000000000 for token auth)
-          echo "$ACR_TOKEN" | docker login $REGISTRY_URL --username 00000000-0000-0000-0000-000000000000 --password-stdin
-          
-          echo "✅ Successfully logged in to ACR: $REGISTRY_URL"
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
 
       - name: Find backend JAR file
         id: backend-jar
@@ -116,6 +130,19 @@ jobs:
           JAR_FILE=$(find backend/target -name "backend-*.jar" ! -name "*-sources.jar" ! -name "*-javadoc.jar" | head -1)
           echo "jar_file=$JAR_FILE" >> $GITHUB_OUTPUT
           echo "Found JAR: $JAR_FILE"
+
+      # 🔹 Step to calculate tags dynamically
+      - name: Compute image tags
+        id: compute_tags
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION_TAG="${GITHUB_REF_NAME}" # e.g., v1.0.2
+          else
+            VERSION_TAG="v1.0.${GITHUB_RUN_NUMBER}" # auto-increment
+          fi
+
+          echo "VERSION_TAG=$VERSION_TAG" >> $GITHUB_ENV
+          echo "Computed version tag: $VERSION_TAG"
 
       - name: Build and push backend image (with UI bundled)
         uses: docker/build-push-action@v6
@@ -126,7 +153,18 @@ jobs:
           build-args: |
             JAR_FILE=${{ steps.backend-jar.outputs.jar_file }}
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION_TAG }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           platforms: linux/amd64
+
+      - name: Output deployment info
+        run: |
+          echo "✅ Successfully deployed to ACR!"
+          echo "Registry: ${{ env.REGISTRY }}"
+          echo "Image: ${{ env.IMAGE_NAME }}"
+          echo "Tags:"
+          echo " - ${{ env.VERSION_TAG }}"
+          echo " - latest"
+          echo " - ${{ github.sha }}"
 
