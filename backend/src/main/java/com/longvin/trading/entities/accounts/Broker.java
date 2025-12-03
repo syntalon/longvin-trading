@@ -1,4 +1,4 @@
-package com.longvin.trading.accounts;
+package com.longvin.trading.entities.accounts;
 
 import jakarta.persistence.*;
 import lombok.*;
@@ -7,18 +7,17 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * DAS Login ID entity representing a DAS Trader login identifier.
- * This is used to associate accounts with DAS Trader login credentials.
+ * Broker entity representing a trading broker.
  */
 @Entity
-@Table(name = "das_login_ids")
+@Table(name = "brokers")
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
-public class DasLoginId {
+public class Broker {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -26,12 +25,15 @@ public class DasLoginId {
     private Long id;
 
     @Column(nullable = false, unique = true, length = 100)
-    private String loginId;
+    private String name;
 
     @Column(length = 500)
     private String description;
 
-    @ManyToMany(mappedBy = "dasLoginIds")
+    @Column(length = 50)
+    private String code;
+
+    @OneToMany(mappedBy = "broker", cascade = CascadeType.ALL, orphanRemoval = true)
     @Builder.Default
     private List<Account> accounts = new ArrayList<>();
 

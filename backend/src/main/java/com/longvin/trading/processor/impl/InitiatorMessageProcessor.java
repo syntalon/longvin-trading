@@ -29,10 +29,14 @@ public class InitiatorMessageProcessor implements FixMessageProcessor {
     
     private final InitiatorLogonGuard logonGuard;
     private final FixSessionManager sessionManager;
+    private final LocateResponseHandler locateResponseHandler;
     
-    public InitiatorMessageProcessor(InitiatorLogonGuard logonGuard, FixSessionManager sessionManager) {
+    public InitiatorMessageProcessor(InitiatorLogonGuard logonGuard, 
+                                     FixSessionManager sessionManager,
+                                     LocateResponseHandler locateResponseHandler) {
         this.logonGuard = logonGuard;
         this.sessionManager = sessionManager;
+        this.locateResponseHandler = locateResponseHandler;
     }
     
     @Override
@@ -132,7 +136,18 @@ public class InitiatorMessageProcessor implements FixMessageProcessor {
     @Override
     public void processIncomingApp(Message message, SessionID sessionID, Map<String, SessionID> shadowSessions) 
             throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
-        // Initiator processor doesn't need to handle application messages for replication
+        try {
+            String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
+            
+            // Handle locate responses (MsgType="M" or custom)
+            if ("M".equals(msgType)) {
+                log.debug("Received locate response on initiator session {}", sessionID);
+                locateResponseHandler.processLocateResponse(message, sessionID);
+            }
+            // Other application messages can be handled here if needed
+        } catch (Exception e) {
+            log.debug("Error processing application message from initiator session {}: {}", sessionID, e.getMessage());
+        }
     }
 }
 

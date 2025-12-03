@@ -26,11 +26,16 @@ spring:
   jpa:
     database-platform: org.hibernate.dialect.H2Dialect
     hibernate:
-      ddl-auto: update
+      ddl-auto: validate  # Use Flyway for migrations, validate schema matches entities
     show-sql: false
     properties:
       hibernate:
         format_sql: true
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    baseline-version: 0
 
 server:
   port: 8081
@@ -79,11 +84,15 @@ spring:
   jpa:
     database-platform: org.hibernate.dialect.H2Dialect
     hibernate:
-      ddl-auto: update
+      ddl-auto: validate  # Use Flyway for migrations
     show-sql: false
     properties:
       hibernate:
         format_sql: true
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
 
 trading:
   fix:
@@ -116,16 +125,20 @@ spring:
   jpa:
     database-platform: org.hibernate.dialect.H2Dialect
     hibernate:
-      ddl-auto: update
+      ddl-auto: validate  # Use Flyway for migrations
     show-sql: false
     properties:
       hibernate:
         format_sql: true
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
 
 trading:
   fix:
-    # Override config to use test configuration pointing to simulator
-    config-path: classpath:fix/das-mirror-trading-test.cfg
+    # Override config to use simulator configuration for testing
+    config-path: classpath:fix/das-mirror-trading-simulator.cfg
 
 logging:
   level:
@@ -149,11 +162,15 @@ spring:
   jpa:
     database-platform: org.hibernate.dialect.H2Dialect
     hibernate:
-      ddl-auto: update
+      ddl-auto: validate  # Use Flyway for migrations
     show-sql: false
     properties:
       hibernate:
         format_sql: true
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
 
 trading:
   fix:

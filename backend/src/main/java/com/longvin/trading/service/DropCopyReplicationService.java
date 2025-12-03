@@ -1,6 +1,9 @@
 package com.longvin.trading.service;
 
 import com.longvin.trading.config.FixClientProperties;
+import com.longvin.trading.entities.orders.Order;
+import com.longvin.trading.service.OrderPersistenceService;
+import com.longvin.trading.service.ShortOrderProcessingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -36,13 +39,19 @@ public class DropCopyReplicationService {
     
     private final FixClientProperties properties;
     private final Executor executor;
+    private final ShortOrderProcessingService shortOrderProcessingService;
+    private final OrderPersistenceService orderPersistenceService;
     private final ConcurrentMap<String, PrimaryOrderState> primaryOrders = new ConcurrentHashMap<>();
     private final Set<String> processedExecIds = ConcurrentHashMap.newKeySet();
     
     public DropCopyReplicationService(FixClientProperties properties,
-                                     @Qualifier("orderMirroringExecutor") Executor executor) {
+                                     @Qualifier("orderMirroringExecutor") Executor executor,
+                                     ShortOrderProcessingService shortOrderProcessingService,
+                                     OrderPersistenceService orderPersistenceService) {
         this.properties = Objects.requireNonNull(properties, "properties must not be null");
         this.executor = Objects.requireNonNull(executor, "executor must not be null");
+        this.shortOrderProcessingService = Objects.requireNonNull(shortOrderProcessingService, "shortOrderProcessingService must not be null");
+        this.orderPersistenceService = Objects.requireNonNull(orderPersistenceService, "orderPersistenceService must not be null");
     }
     
     /**
@@ -92,6 +101,14 @@ public class DropCopyReplicationService {
             return;
         }
 
+        // Persist ExecutionReport as OrderEvent and Order
+        try {
+            orderPersistenceService.createOrderEvent(report, sessionID);
+        } catch (Exception e) {
+            log.error("Error persisting ExecutionReport: {}", e.getMessage(), e);
+            // Continue processing even if persistence fails
+        }
+        
         char execType = report.getExecType().getValue();
         if (execType == ExecType.NEW) {
             handleNewExecution(report, account, orderId, initiatorSessionID);
@@ -111,7 +128,62 @@ public class DropCopyReplicationService {
         if (!state.markMirrored()) {
             return;
         }
-        replicateNewOrderToShadows(state, initiatorSessionID);
+        
+        // Check if this is a short order
+        if (state.side != null && shortOrderProcessingService.isShortOrder(state.side)) {
+            log.info("Detected short order for orderId={}, symbol={}, side={}, qty={}", 
+                orderId, state.symbol, state.side, state.orderQty);
+            
+            // Process short order with locate request workflow
+            // Note: This requires Order entity to be created first from the ExecutionReport
+            // For now, we'll trigger the locate request process
+            processShortOrderWithLocate(state, account, orderId, initiatorSessionID);
+        } else {
+            // Regular order - replicate directly to shadows
+            replicateNewOrderToShadows(state, initiatorSessionID);
+        }
+    }
+    
+    /**
+     * Process a short order: send locate request, wait for response, borrow stock, then place shadow orders.
+     */
+    private void processShortOrderWithLocate(PrimaryOrderState state, String account, String orderId, SessionID initiatorSessionID) {
+        if (state.symbol == null || state.orderQty == null) {
+            log.warn("Cannot process short order: missing symbol or quantity for orderId={}", orderId);
+            return;
+        }
+        
+        // Get Order entity from database (should have been persisted by OrderPersistenceService)
+        Optional<Order> orderOpt = orderPersistenceService.getOrderByFixOrderId(orderId);
+        if (orderOpt.isEmpty()) {
+            log.warn("Order not found in database for orderId={}, cannot process short order locate request", orderId);
+            return;
+        }
+        
+        Order order = orderOpt.get();
+        
+        // Check if order is actually short
+        if (order.getSide() == null || !shortOrderProcessingService.isShortOrder(order.getSide())) {
+            log.warn("Order {} is not a short order (side={}), skipping locate request", orderId, order.getSide());
+            return;
+        }
+        
+        log.info("Processing short order locate request: OrderId={}, Symbol={}, Qty={}", 
+            orderId, state.symbol, state.orderQty);
+        
+        // Process short order with locate request
+        try {
+            shortOrderProcessingService.processShortOrder(
+                order,
+                state.symbol,
+                state.orderQty,
+                initiatorSessionID
+            );
+            log.info("Locate request sent for short order: OrderId={}, Symbol={}, Qty={}", 
+                orderId, state.symbol, state.orderQty);
+        } catch (Exception e) {
+            log.error("Error processing short order locate request for orderId={}", orderId, e);
+        }
     }
 
     private void handleReplaceExecution(ExecutionReport report, String orderId, SessionID initiatorSessionID) 

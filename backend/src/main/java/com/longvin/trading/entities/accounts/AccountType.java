@@ -1,4 +1,4 @@
-package com.longvin.trading.accounts;
+package com.longvin.trading.entities.accounts;
 
 /**
  * Enum representing the type of account.

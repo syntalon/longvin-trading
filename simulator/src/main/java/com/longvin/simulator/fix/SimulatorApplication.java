@@ -1,15 +1,28 @@
 package com.longvin.simulator.fix;
 
+import com.longvin.simulator.service.ExecutionReportResponseService;
+import com.longvin.simulator.service.LocateResponseService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import quickfix.*;
 import quickfix.field.*;
 import quickfix.fix42.ExecutionReport;
 import quickfix.fix42.NewOrderSingle;
+import quickfix.fix42.OrderCancelRequest;
+import quickfix.fix42.OrderCancelReplaceRequest;
 
 @Slf4j
 @Component
 public class SimulatorApplication implements Application {
+
+    private final ExecutionReportResponseService executionReportService;
+    private final LocateResponseService locateResponseService;
+
+    public SimulatorApplication(ExecutionReportResponseService executionReportService,
+                               LocateResponseService locateResponseService) {
+        this.executionReportService = executionReportService;
+        this.locateResponseService = locateResponseService;
+    }
 
     @Override
     public void onCreate(SessionID sessionID) {
@@ -102,8 +115,8 @@ public class SimulatorApplication implements Application {
                     log.info("Simulator received NewOrderSingle (session: {}): seqNum={}, ClOrdID={}, Symbol={}, Side={}, OrderQty={}", 
                         sessionID, seqNum, clOrdId, symbol, side, orderQty);
                     
-                    // Simulate sending an ExecutionReport
-                    sendExecutionReport(sessionID, order);
+                    // Automatically respond with ExecutionReport
+                    executionReportService.sendNewOrderExecutionReport(sessionID, order);
                 } catch (Exception e) {
                     log.error("Error parsing NewOrderSingle: {}", e.getMessage(), e);
                 }
@@ -120,66 +133,59 @@ public class SimulatorApplication implements Application {
                 } catch (Exception e) {
                     log.error("Error parsing ExecutionReport: {}", e.getMessage(), e);
                 }
+            } else if ("L".equals(msgType)) {
+                // LocateRequest
+                try {
+                    String locateReqId = message.isSetField(ClOrdID.FIELD) ? message.getString(ClOrdID.FIELD) : "N/A";
+                    String symbol = message.isSetField(Symbol.FIELD) ? message.getString(Symbol.FIELD) : "N/A";
+                    double qty = message.isSetField(OrderQty.FIELD) ? message.getDouble(OrderQty.FIELD) : 0.0;
+                    log.info("Simulator received LocateRequest (session: {}): seqNum={}, LocateReqID={}, Symbol={}, Qty={}", 
+                        sessionID, seqNum, locateReqId, symbol, qty);
+                    
+                    // Automatically respond with an approved locate response
+                    locateResponseService.sendLocateResponse(sessionID, message);
+                } catch (Exception e) {
+                    log.error("Error parsing LocateRequest: {}", e.getMessage(), e);
+                }
+            } else if ("F".equals(msgType)) {
+                // OrderCancelRequest
+                try {
+                    OrderCancelRequest cancelRequest = new OrderCancelRequest();
+                    cancelRequest.fromString(message.toString(), null, false);
+                    String clOrdId = cancelRequest.isSetField(ClOrdID.FIELD) ? cancelRequest.getString(ClOrdID.FIELD) : "N/A";
+                    String origClOrdId = cancelRequest.isSetField(OrigClOrdID.FIELD) ? cancelRequest.getString(OrigClOrdID.FIELD) : "N/A";
+                    String symbol = cancelRequest.isSetField(Symbol.FIELD) ? cancelRequest.getString(Symbol.FIELD) : "N/A";
+                    log.info("Simulator received OrderCancelRequest (session: {}): seqNum={}, ClOrdID={}, OrigClOrdID={}, Symbol={}", 
+                        sessionID, seqNum, clOrdId, origClOrdId, symbol);
+                    
+                    // Automatically respond with canceled ExecutionReport
+                    executionReportService.sendCancelExecutionReport(sessionID, cancelRequest);
+                } catch (Exception e) {
+                    log.error("Error parsing OrderCancelRequest: {}", e.getMessage(), e);
+                }
+            } else if ("G".equals(msgType)) {
+                // OrderCancelReplaceRequest (Order Replace)
+                try {
+                    OrderCancelReplaceRequest replaceRequest = new OrderCancelReplaceRequest();
+                    replaceRequest.fromString(message.toString(), null, false);
+                    String clOrdId = replaceRequest.isSetField(ClOrdID.FIELD) ? replaceRequest.getString(ClOrdID.FIELD) : "N/A";
+                    String origClOrdId = replaceRequest.isSetField(OrigClOrdID.FIELD) ? replaceRequest.getString(OrigClOrdID.FIELD) : "N/A";
+                    String symbol = replaceRequest.isSetField(Symbol.FIELD) ? replaceRequest.getString(Symbol.FIELD) : "N/A";
+                    double orderQty = replaceRequest.isSetField(OrderQty.FIELD) ? replaceRequest.getOrderQty().getValue() : 0.0;
+                    log.info("Simulator received OrderCancelReplaceRequest (session: {}): seqNum={}, ClOrdID={}, OrigClOrdID={}, Symbol={}, OrderQty={}", 
+                        sessionID, seqNum, clOrdId, origClOrdId, symbol, orderQty);
+                    
+                    // Automatically respond with replaced ExecutionReport
+                    executionReportService.sendReplaceExecutionReport(sessionID, replaceRequest);
+                } catch (Exception e) {
+                    log.error("Error parsing OrderCancelReplaceRequest: {}", e.getMessage(), e);
+                }
             } else {
                 log.info("Simulator received application message (session: {}): msgType={}, seqNum={}", 
                     sessionID, msgType, seqNum);
             }
         } catch (Exception e) {
             log.error("Error processing incoming application message: {}", e.getMessage(), e);
-        }
-    }
-
-    private void sendExecutionReport(SessionID sessionID, NewOrderSingle order) {
-        try {
-            Session session = Session.lookupSession(sessionID);
-            if (session == null || !session.isLoggedOn()) {
-                log.warn("Cannot send ExecutionReport: session {} is not logged on", sessionID);
-                return;
-            }
-
-            char side = order.getSide().getValue();
-            double orderQty = order.getOrderQty().getValue();
-            double price = order.getPrice().getValue();
-            Symbol symbol = order.getSymbol();
-            
-            ExecutionReport report = new ExecutionReport(
-                new OrderID("SIM-" + System.currentTimeMillis()),
-                new ExecID("EXEC-" + System.currentTimeMillis()),
-                new ExecTransType(ExecTransType.NEW),
-                new ExecType(ExecType.FILL),
-                new OrdStatus(OrdStatus.FILLED),
-                symbol,
-                new Side(side),
-                new LeavesQty(0.0),
-                new CumQty(orderQty),
-                new AvgPx(price)
-            );
-
-            // Copy fields from original order
-            if (order.isSetField(ClOrdID.FIELD)) {
-                report.setString(ClOrdID.FIELD, order.getString(ClOrdID.FIELD));
-            }
-            if (order.isSetField(Symbol.FIELD)) {
-                report.setString(Symbol.FIELD, order.getString(Symbol.FIELD));
-            }
-            if (order.isSetField(OrderQty.FIELD)) {
-                report.set(new OrderQty(orderQty));
-            }
-            if (order.isSetField(Price.FIELD)) {
-                report.set(new LastPx(price));
-            }
-            if (order.isSetField(Account.FIELD)) {
-                report.setString(Account.FIELD, order.getString(Account.FIELD));
-            }
-
-            report.set(new LastShares(orderQty));
-            report.set(new TransactTime());
-
-            session.send(report);
-            log.info("Simulator sent ExecutionReport (session: {}): OrderID={}, ExecType={}, OrdStatus={}", 
-                sessionID, report.getString(OrderID.FIELD), ExecType.FILL, OrdStatus.FILLED);
-        } catch (Exception e) {
-            log.error("Error sending ExecutionReport: {}", e.getMessage(), e);
         }
     }
 }

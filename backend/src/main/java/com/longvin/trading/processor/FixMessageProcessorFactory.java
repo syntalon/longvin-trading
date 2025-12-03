@@ -5,6 +5,7 @@ import com.longvin.trading.fix.FixSessionManager;
 import com.longvin.trading.fix.InitiatorLogonGuard;
 import com.longvin.trading.processor.impl.AcceptorMessageProcessor;
 import com.longvin.trading.processor.impl.InitiatorMessageProcessor;
+import com.longvin.trading.processor.impl.LocateResponseHandler;
 import com.longvin.trading.service.DropCopyReplicationService;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
@@ -25,15 +26,18 @@ public class FixMessageProcessorFactory {
     private final FixSessionManager sessionManager;
     private final DropCopyReplicationService replicationService;
     private final FixClientProperties properties;
+    private final LocateResponseHandler locateResponseHandler;
 
     public FixMessageProcessorFactory(InitiatorLogonGuard logonGuard,
-                                      @Lazy FixSessionManager sessionManager,
-                                      DropCopyReplicationService replicationService,
-                                      FixClientProperties properties) {
+                                     @Lazy FixSessionManager sessionManager,
+                                     DropCopyReplicationService replicationService,
+                                     FixClientProperties properties,
+                                     LocateResponseHandler locateResponseHandler) {
         this.logonGuard = logonGuard;
         this.sessionManager = sessionManager;
         this.replicationService = replicationService;
         this.properties = properties;
+        this.locateResponseHandler = locateResponseHandler;
     }
 
     /**
@@ -44,7 +48,7 @@ public class FixMessageProcessorFactory {
         List<FixMessageProcessor> processors = new ArrayList<>();
         
         if ("initiator".equalsIgnoreCase(connectionType)) {
-            processors.add(new InitiatorMessageProcessor(logonGuard, sessionManager));
+            processors.add(new InitiatorMessageProcessor(logonGuard, sessionManager, locateResponseHandler));
         } else if ("acceptor".equalsIgnoreCase(connectionType)) {
             processors.add(new AcceptorMessageProcessor(replicationService, properties));
         }
@@ -59,7 +63,7 @@ public class FixMessageProcessorFactory {
         List<FixMessageProcessor> processors = new ArrayList<>();
         
         // Try both types - the processor's handlesSession() will determine if it matches
-        processors.add(new InitiatorMessageProcessor(logonGuard, sessionManager));
+        processors.add(new InitiatorMessageProcessor(logonGuard, sessionManager, locateResponseHandler));
         processors.add(new AcceptorMessageProcessor(replicationService, properties));
         
         return processors;

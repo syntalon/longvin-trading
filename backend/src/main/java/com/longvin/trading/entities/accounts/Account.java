@@ -1,4 +1,4 @@
-package com.longvin.trading.accounts;
+package com.longvin.trading.entities.accounts;
 
 import jakarta.persistence.*;
 import lombok.*;
@@ -48,6 +48,9 @@ public class Account {
     @Column(nullable = false, length = 20)
     @Builder.Default
     private AccountType accountType = AccountType.SHADOW;
+
+    @Column(length = 64)
+    private String strategyKey; // e.g. "OPAL_GROUP_1"
 
     @Column(nullable = false)
     @Builder.Default
