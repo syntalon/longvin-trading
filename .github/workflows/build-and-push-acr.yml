@@ -67,12 +67,21 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Get ACR login server name
+        id: get-acr-name
+        run: |
+          # Extract registry name from full URL (e.g., myregistry.azurecr.io -> myregistry)
+          ACR_NAME=$(echo "${{ env.REGISTRY }}" | sed 's/\.azurecr\.io//')
+          echo "acr_name=$ACR_NAME" >> $GITHUB_OUTPUT
+          echo "ACR Name: $ACR_NAME"
+
       - name: Log in to Azure Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.ACR_USERNAME }}
-          password: ${{ secrets.ACR_PASSWORD }}
+        run: |
+          ACR_NAME=${{ steps.get-acr-name.outputs.acr_name }}
+          # Get ACR access token using current Azure CLI session (OIDC authenticated)
+          ACR_TOKEN=$(az account get-access-token --resource https://$ACR_NAME.azurecr.io --query accessToken -o tsv)
+          # Login to Docker using the token (username must be 00000000-0000-0000-0000-000000000000 for token auth)
+          echo "$ACR_TOKEN" | docker login ${{ env.REGISTRY }} --username 00000000-0000-0000-0000-000000000000 --password-stdin
 
       - name: Find backend JAR file
         id: backend-jar
