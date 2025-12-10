@@ -92,7 +92,7 @@ public class AcceptorMessageProcessor implements FixMessageProcessor {
                 log.info("Sending Logout (acceptor session: {}): {}", sessionID, message);
             } else if ("0".equals(msgType)) {
                 int seqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
-                log.info("Sending Heartbeat (acceptor session: {}): seqNum={}", sessionID, seqNum);
+                //log.info("Sending Heartbeat (acceptor session: {}): seqNum={}", sessionID, seqNum);
             } else if ("1".equals(msgType)) {
                 log.debug("Sending TestRequest (acceptor session: {})", sessionID);
             }
@@ -115,8 +115,8 @@ public class AcceptorMessageProcessor implements FixMessageProcessor {
                 }
                 boolean hasResetFlag = message.isSetField(quickfix.field.ResetSeqNumFlag.FIELD) 
                     && message.getBoolean(quickfix.field.ResetSeqNumFlag.FIELD);
-                log.info("Received Logon request from DAS Trader (acceptor session: {}): seqNum={}, HeartBtInt={} seconds, ResetSeqNumFlag={}, message={}", 
-                    sessionID, seqNum, heartBtInt, hasResetFlag, message);
+                log.info("Received Logon request from DAS Trader (acceptor session: {}): seqNum={}, HeartBtInt={} seconds, ResetSeqNumFlag={}, message={}",
+                   sessionID, seqNum, heartBtInt, hasResetFlag, message);
             } else if ("5".equals(msgType)) {
                 String text = message.isSetField(quickfix.field.Text.FIELD) 
                     ? message.getString(quickfix.field.Text.FIELD) 
@@ -130,10 +130,10 @@ public class AcceptorMessageProcessor implements FixMessageProcessor {
                     boolean isTestResponse = message.isSetField(quickfix.field.TestReqID.FIELD);
                     if (isTestResponse) {
                         String testReqId = message.getString(quickfix.field.TestReqID.FIELD);
-                        log.info("Received Heartbeat (TestRequest response) from DAS Trader (acceptor session: {}): seqNum={}, TestReqID={}", 
-                            sessionID, seqNum, testReqId);
+                       // log.info("Received Heartbeat (TestRequest response) from DAS Trader (acceptor session: {}): seqNum={}, TestReqID={}",
+                        //    sessionID, seqNum, testReqId);
                     } else {
-                        log.info("Received Heartbeat from DAS Trader (acceptor session: {}): seqNum={}", sessionID, seqNum);
+                        //log.info("Received Heartbeat from DAS Trader (acceptor session: {}): seqNum={}", sessionID, seqNum);
                     }
                 } catch (Exception e) {
                     log.warn("Error processing heartbeat from acceptor session {}: {}", sessionID, e.getMessage());
@@ -155,7 +155,7 @@ public class AcceptorMessageProcessor implements FixMessageProcessor {
             String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
             String msgTypeName = getMsgTypeName(msgType);
             int msgSeqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
-            
+            log.info("shadowSessions={}", shadowSessions);
             // Log all messages from drop copy session
             log.info("📥 Received {} from DAS Trader drop copy session {} - MsgSeqNum: {}", 
                 msgTypeName, sessionID, msgSeqNum);

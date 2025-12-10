@@ -37,7 +37,7 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
     private static final Logger log = LoggerFactory.getLogger(OrderReplicationCoordinator.class);
 
     private final FixClientProperties properties;
-    private final Map<String, SessionID> sessionsBySenderCompId = new ConcurrentHashMap<>();
+    private final Map<String, SessionID> initiatorSessionMap = new ConcurrentHashMap<>();
     private final Map<SessionID, String> sessionConnectionTypes = new ConcurrentHashMap<>(); // SessionID -> "acceptor" or "initiator"
     private final OrderReplicationService orderReplicationService;
     private final FixMessageProcessorFactory processorFactory;
@@ -57,13 +57,14 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
 
     @Override
     public void onCreate(SessionID sessionID) {
-        sessionsBySenderCompId.put(sessionID.getSenderCompID(), sessionID);
-        
         // Determine and store connection type for this session
         String connectionType = determineConnectionType(sessionID);
         if (connectionType != null) {
             sessionConnectionTypes.put(sessionID, connectionType);
             log.info("Created FIX session {} (connection type: {})", sessionID, connectionType);
+            if("initiator".equalsIgnoreCase(connectionType))
+                initiatorSessionMap.put(sessionID.getTargetCompID(), sessionID);{
+            }
         } else {
             log.info("Created FIX session {} (connection type: unknown)", sessionID);
         }
@@ -91,9 +92,7 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
 
     @Override
     public void onLogon(SessionID sessionID) {
-        sessionsBySenderCompId.put(sessionID.getSenderCompID(), sessionID);
         log.info("Logged on to FIX session {}", sessionID);
-        
         // For drop copy acceptor sessions, synchronize sequence numbers after logon
         // This ensures we're in sync with DAS Trader's sequence numbers
         if (isDropCopySession(sessionID)) {
@@ -111,7 +110,7 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
 
     @Override
     public void onLogout(SessionID sessionID) {
-        sessionsBySenderCompId.remove(sessionID.getSenderCompID());
+        initiatorSessionMap.remove(sessionID.getTargetCompID());
         try {
             Session session = Session.lookupSession(sessionID);
             if (session != null) {
@@ -276,7 +275,7 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
                 : processor.handlesSession(sessionID);
             
             if (handles) {
-                processor.processIncomingApp(message, sessionID, sessionsBySenderCompId);
+                processor.processIncomingApp(message, sessionID, initiatorSessionMap);
                 
                 // Track the message for drop copy session (for REST API)
                 if (isDropCopySession(sessionID)) {
@@ -467,7 +466,7 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
      * @return Optional containing the SessionID if found and logged on, empty otherwise
      */
     public Optional<SessionID> getSessionIdForSenderCompId(String senderCompId) {
-        return Optional.ofNullable(sessionsBySenderCompId.get(senderCompId));
+        return Optional.ofNullable(initiatorSessionMap.get(senderCompId));
     }
 
 

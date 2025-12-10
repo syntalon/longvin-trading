@@ -147,14 +147,32 @@ spring:
     baseline-on-migrate: true
 
 trading:
+  initiator:
+    non-trading-resume-hour: 6
   fix:
+    enabled: true
     # Override config to use test configuration pointing to simulator
     config-path: classpath:fix/das-mirror-trading-simulator.cfg
-
-logging:
-  level:
-    com.longvin.trading: DEBUG
-
+    primary-session: OPAL
+    drop-copy-session-sender-comp-id: OS111
+    drop-copy-session-target-comp-id: DAST
+    primary-account: PRIMARY_ACCOUNT
+    shadow-sessions: SHADOW1,SHADOW2
+    shadow-accounts:
+      SHADOW1: SHADOW_ACCOUNT_1
+      SHADOW2: SHADOW_ACCOUNT_2
+    shadow-account-policies:
+      SHADOW1:
+        ratio: 5.0
+        replenish-window: PT2M
+        holding-window: PT3M
+        partial-cancel-window: PT30S
+      SHADOW2:
+        ratio: 1.0
+        replenish-window: PT2M
+        holding-window: PT2M
+        partial-cancel-window: PT20S
+    cl-ord-id-prefix: MIRROR-
 ---
 # Dev profile configuration
 spring:
@@ -187,13 +205,3 @@ trading:
   fix:
     # Dev FIX config pointing to DAS Trader dev environment
     config-path: classpath:fix/das-mirror-trading-dev.cfg
-
-logging:
-  level:
-    com.longvin.trading: DEBUG
-    quickfix: DEBUG
-    quickfix.mina: DEBUG
-    quickfix.mina.initiator: TRACE
-    quickfix.mina.acceptor: DEBUG
-    com.longvin.trading.processor: DEBUG
-    org.apache.mina: DEBUG

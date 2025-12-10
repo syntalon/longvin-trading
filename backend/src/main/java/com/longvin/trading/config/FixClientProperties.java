@@ -1,5 +1,7 @@
 package com.longvin.trading.config;
 
+import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -37,6 +39,8 @@ public class FixClientProperties {
     private final Set<String> shadowAccountValues;
     @Getter
     private final String clOrdIdPrefix;
+    @Getter
+    private final Map<String, ShadowAccountPolicy> shadowAccountPolicies;
 
     public FixClientProperties(
             @DefaultValue("false") boolean enabled,
@@ -47,6 +51,7 @@ public class FixClientProperties {
             String primaryAccount,
             List<String> shadowSessions,
             Map<String, String> shadowAccounts,
+            Map<String, ShadowAccountPolicy> shadowAccountPolicies,
             @DefaultValue("MIRROR-") String clOrdIdPrefix) {
 
         this.enabled = enabled;
@@ -61,6 +66,8 @@ public class FixClientProperties {
         this.shadowAccounts = Collections.unmodifiableMap(accounts);
         Set<String> accountValues = new LinkedHashSet<>(accounts.values());
         this.shadowAccountValues = Collections.unmodifiableSet(accountValues);
+        this.shadowAccountPolicies = Collections.unmodifiableMap(
+                shadowAccountPolicies == null ? Map.of() : shadowAccountPolicies);
         this.clOrdIdPrefix = Objects.requireNonNull(clOrdIdPrefix, "clOrdIdPrefix must not be null");
     }
 
@@ -68,4 +75,22 @@ public class FixClientProperties {
         return Optional.ofNullable(primaryAccount);
     }
 
+    @Getter
+    public static class ShadowAccountPolicy {
+        private final BigDecimal ratio;
+        private final Duration replenishWindow;
+        private final Duration holdingWindow;
+        private final Duration partialCancelWindow;
+
+        public ShadowAccountPolicy(
+                @DefaultValue("1") BigDecimal ratio,
+                @DefaultValue("PT2M") Duration replenishWindow,
+                @DefaultValue("PT2M") Duration holdingWindow,
+                @DefaultValue("PT30S") Duration partialCancelWindow) {
+            this.ratio = ratio == null ? BigDecimal.ONE : ratio;
+            this.replenishWindow = replenishWindow == null ? Duration.ofMinutes(2) : replenishWindow;
+            this.holdingWindow = holdingWindow == null ? Duration.ofMinutes(2) : holdingWindow;
+            this.partialCancelWindow = partialCancelWindow == null ? Duration.ofSeconds(30) : partialCancelWindow;
+        }
+    }
 }

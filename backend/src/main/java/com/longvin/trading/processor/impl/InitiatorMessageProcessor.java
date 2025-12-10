@@ -74,7 +74,7 @@ public class InitiatorMessageProcessor implements FixMessageProcessor {
                 log.info("Sending Logout (initiator session: {}): {}", sessionID, message);
             } else if ("0".equals(msgType)) {
                 int seqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
-                log.info("Sending Heartbeat (initiator session: {}): seqNum={}", sessionID, seqNum);
+                //log.info("Sending Heartbeat (initiator session: {}): seqNum={}", sessionID, seqNum);
             } else if ("1".equals(msgType)) {
                 log.debug("Sending TestRequest (initiator session: {})", sessionID);
             }
@@ -118,7 +118,7 @@ public class InitiatorMessageProcessor implements FixMessageProcessor {
                         log.info("Received Heartbeat (TestRequest response) from server (initiator session: {}): seqNum={}, TestReqID={}", 
                             sessionID, seqNum, testReqId);
                     } else {
-                        log.info("Received Heartbeat from server (initiator session: {}): seqNum={}", sessionID, seqNum);
+                        //log.info("Received Heartbeat from server (initiator session: {}): seqNum={}", sessionID, seqNum);
                     }
                 } catch (Exception e) {
                     log.warn("Error processing heartbeat from initiator session {}: {}", sessionID, e.getMessage());
