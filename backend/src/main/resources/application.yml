@@ -64,6 +64,17 @@ trading:
     shadow-accounts:
       SHADOW1: SHADOW_ACCOUNT_1
       SHADOW2: SHADOW_ACCOUNT_2
+    shadow-account-policies:
+      SHADOW1:
+        ratio: 5.0
+        replenish-window: PT2M
+        holding-window: PT3M
+        partial-cancel-window: PT30S
+      SHADOW2:
+        ratio: 1.0
+        replenish-window: PT2M
+        holding-window: PT2M
+        partial-cancel-window: PT20S
     cl-ord-id-prefix: MIRROR-
 ---
 # Production profile configuration
@@ -138,7 +149,7 @@ spring:
 trading:
   fix:
     # Override config to use test configuration pointing to simulator
-    config-path: classpath:fix/das-mirror-trading-test.cfg
+    config-path: classpath:fix/das-mirror-trading-simulator.cfg
 
 logging:
   level:
