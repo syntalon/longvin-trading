@@ -178,9 +178,9 @@ public class OrderEvent {
 
     /**
      * Raw FIX message (optional, for debugging/audit).
+     * Uses TEXT type for PostgreSQL (more efficient than OID/CLOB).
      */
-    @Lob
-    @Column(name = "raw_fix_message")
+    @Column(name = "raw_fix_message", columnDefinition = "TEXT")
     private String rawFixMessage;
 
     /**

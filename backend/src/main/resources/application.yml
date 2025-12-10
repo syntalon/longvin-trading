@@ -4,38 +4,36 @@ spring:
   application:
     name: LongvinTradingBackend
   datasource:
-    url: jdbc:h2:mem:tradingdb
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
+    url: jdbc:postgresql://dev-chia.postgres.database.azure.com:5432/dev_svc_longvin?sslmode=require&connectTimeout=60&socketTimeout=60&loginTimeout=30&currentSchema=svc_longvin
+    driver-class-name: org.postgresql.Driver
+    username: svc_longvin_user
+    password: syntalon@123
     hikari:
-      # Connection pool settings
-      minimum-idle: 2
-      maximum-pool-size: 10
-      connection-timeout: 30000
-      idle-timeout: 600000
-      max-lifetime: 1800000
-      # Housekeeper runs every 30 seconds by default
-      # Increase the threshold for thread starvation detection to reduce false positives
-      # This is a HikariCP internal setting - we can't directly configure it,
-      # but ensuring adequate thread pool sizes helps
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
+      connection-timeout: 60000
+      maximum-pool-size: 5
+      minimum-idle: 1
+      idle-timeout: 300000
+      max-lifetime: 1200000
+      leak-detection-threshold: 60000
+      schema: svc_longvin
   jpa:
-    database-platform: org.hibernate.dialect.H2Dialect
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
       ddl-auto: validate  # Use Flyway for migrations, validate schema matches entities
     show-sql: false
     properties:
       hibernate:
         format_sql: true
+        default_schema: svc_longvin
   flyway:
     enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true
     baseline-version: 0
+    schemas: svc_longvin
+    default-schema: svc_longvin
+    # PostgreSQL 17 support
+    database-type: postgresql
 
 server:
   port: 8081
@@ -84,26 +82,37 @@ spring:
     activate:
       on-profile: prod
   datasource:
-    url: jdbc:h2:mem:tradingdb-prod
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
+    url: jdbc:postgresql://dev-chia.postgres.database.azure.com:5432/dev_svc_longvin?sslmode=require&connectTimeout=60&socketTimeout=60&loginTimeout=30&currentSchema=svc_longvin
+    driver-class-name: org.postgresql.Driver
+    username: svc_longvin_user
+    password: syntalon@123
+    hikari:
+      connection-timeout: 60000
+      maximum-pool-size: 5
+      minimum-idle: 1
+      idle-timeout: 300000
+      max-lifetime: 1200000
+      leak-detection-threshold: 60000
+      schema: svc_longvin
   jpa:
-    database-platform: org.hibernate.dialect.H2Dialect
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
       ddl-auto: validate  # Use Flyway for migrations
     show-sql: false
     properties:
       hibernate:
         format_sql: true
+        default_schema: svc_longvin
   flyway:
     enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true
+    schemas: svc_longvin
+    default-schema: svc_longvin
+    database-type: postgresql
+    # Note: Schema must be created manually by admin using SETUP_SCHEMA.sql
+    # The migration user (svc_longvin_user) doesn't have permission to create schemas
+    create-schemas: false
 
 trading:
   fix:
