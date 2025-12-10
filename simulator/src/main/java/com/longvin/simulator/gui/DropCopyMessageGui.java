@@ -135,7 +135,7 @@ public class DropCopyMessageGui implements CommandLineRunner {
         gbc.weightx = 1.0;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         execTypeCombo = new JComboBox<>(DropCopyMessageSender.ExecutionReportData.ExecType.values());
-        execTypeCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.ExecType.FILL);
+        execTypeCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.ExecType.NEW);
         formPanel.add(execTypeCombo, gbc);
         row++;
         
@@ -319,7 +319,7 @@ public class DropCopyMessageGui implements CommandLineRunner {
         clOrdIdField.setText("");
         origClOrdIdField.setText("");
         symbolField.setText("");
-        execTypeCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.ExecType.FILL);
+        execTypeCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.ExecType.NEW);
         ordStatusCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.OrdStatus.FILLED);
         sideCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.Side.BUY);
         ordTypeCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.OrdType.MARKET);
@@ -341,7 +341,7 @@ public class DropCopyMessageGui implements CommandLineRunner {
         execIdField.setText("EXEC-" + System.currentTimeMillis());
         clOrdIdField.setText("CLORD-" + System.currentTimeMillis());
         symbolField.setText("AAPL");
-        execTypeCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.ExecType.FILL);
+        execTypeCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.ExecType.NEW);
         ordStatusCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.OrdStatus.FILLED);
         sideCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.Side.BUY);
         ordTypeCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.OrdType.MARKET);

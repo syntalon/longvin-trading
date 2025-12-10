@@ -152,10 +152,8 @@ public class DropCopyMessageSender {
 
         // Enums matching FIX values
         public enum ExecType {
-            NEW('0'), PARTIAL_FILL('1'), FILL('2'), DONE_FOR_DAY('3'), CANCELED('4'),
-            REPLACED('5'), PENDING_CANCEL('6'), STOPPED('7'), REJECTED('8'), SUSPENDED('9'),
-            PENDING_NEW('A'), CALCULATED('B'), EXPIRED('C'), RESTATED('D'), PENDING_REPLACE('E'),
-            TRADE('F'), TRADE_CORRECT('G'), TRADE_CANCEL('H'), ORDER_STATUS('I');
+            NEW('0'), PARTIALLY_FILLED('1'), FILLED('2'), CANCELED('4'),
+            REPLACED('5');
 
             private final char fixValue;
             ExecType(char fixValue) { this.fixValue = fixValue; }
@@ -163,9 +161,8 @@ public class DropCopyMessageSender {
         }
 
         public enum OrdStatus {
-            NEW('0'), PARTIALLY_FILLED('1'), FILLED('2'), DONE_FOR_DAY('3'), CANCELED('4'),
-            REPLACED('5'), PENDING_CANCEL('6'), STOPPED('7'), REJECTED('8'), SUSPENDED('9'),
-            PENDING_NEW('A'), CALCULATED('B'), EXPIRED('C'), ACCEPTED_FOR_BIDDING('D'), PENDING_REPLACE('E');
+            NEW('0'), PARTIALLY_FILLED('1'), FILLED('2'), CANCELED('4'),
+            REPLACED('5'), PENDING_CANCEL('6'), CALCULATED('B'), PENDING_REPLACE('E');
 
             private final char fixValue;
             OrdStatus(char fixValue) { this.fixValue = fixValue; }
