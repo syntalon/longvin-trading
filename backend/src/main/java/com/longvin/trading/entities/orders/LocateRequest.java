@@ -35,7 +35,15 @@ public class LocateRequest {
     private UUID id;
 
     /**
-     * The order that triggered this locate request.
+     * The order group this locate request is for.
+     * Locate is at the group level, not individual order level.
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "order_group_id", nullable = false)
+    private OrderGroup orderGroup;
+
+    /**
+     * The primary order that triggered this locate request (for reference).
      */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "order_id", nullable = false)
@@ -68,23 +76,6 @@ public class LocateRequest {
     @Builder.Default
     private LocateStatus status = LocateStatus.PENDING;
 
-    /**
-     * Quantity available for borrowing (from locate response).
-     */
-    @Column(name = "available_qty", precision = 18, scale = 8)
-    private BigDecimal availableQty;
-
-    /**
-     * Quantity actually borrowed.
-     */
-    @Column(name = "borrowed_qty", precision = 18, scale = 8)
-    private BigDecimal borrowedQty;
-
-    /**
-     * Locate ID from the broker/exchange response.
-     */
-    @Column(name = "locate_id", length = 100)
-    private String locateId;
 
     /**
      * Response message or reason if locate was rejected.
@@ -93,10 +84,36 @@ public class LocateRequest {
     private String responseMessage;
 
     /**
-     * FIX LocateReqID (client-generated request ID).
+     * FIX QuoteReqID (tag 131) - client-generated request ID, echoed back in response.
+     * This is the ID used in Short Locate Quote Request (MsgType=R) and Response (MsgType=S).
      */
-    @Column(name = "fix_locate_req_id", length = 100)
-    private String fixLocateReqId;
+    @Column(name = "fix_quote_req_id", length = 100)
+    private String fixQuoteReqId;
+
+    /**
+     * Locate route (tag 100) - routing destination for locate request.
+     */
+    @Column(name = "locate_route", length = 100)
+    private String locateRoute;
+
+    /**
+     * Offer price per share (tag 133) - fee per share from locate quote response.
+     */
+    @Column(name = "offer_px", precision = 18, scale = 8)
+    private BigDecimal offerPx;
+
+    /**
+     * Offer size (tag 135) - available shares from locate quote response.
+     * <= 0 means locate failed.
+     */
+    @Column(name = "offer_size", precision = 18, scale = 8)
+    private BigDecimal offerSize;
+
+    /**
+     * Approved quantity - actual quantity approved for borrowing (may be less than requested).
+     */
+    @Column(name = "approved_qty", precision = 18, scale = 8)
+    private BigDecimal approvedQty;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     @Builder.Default
@@ -112,12 +129,12 @@ public class LocateRequest {
     }
 
     public enum LocateStatus {
-        PENDING,        // Locate request sent, waiting for response
-        APPROVED,       // Locate approved, stock available
-        REJECTED,       // Locate rejected, stock not available
-        BORROWED,       // Stock successfully borrowed
-        EXPIRED,        // Locate expired
-        CANCELLED       // Locate request cancelled
+        PENDING,                    // Quote request sent, waiting for response
+        APPROVED_FULL,              // Full quantity approved
+        APPROVED_PARTIAL,           // Partial quantity approved (less than requested)
+        REJECTED,                  // Locate rejected (OfferSize <= 0)
+        EXPIRED,                    // Locate expired
+        CANCELLED                   // Locate request cancelled
     }
 }
 

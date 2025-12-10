@@ -28,97 +28,81 @@ public class LocateResponseHandler {
     }
 
     /**
-     * Process a locate response message.
-     * Expected message types:
-     * - "M" = LocateResponse (if standard FIX)
-     * - Custom message types may vary by broker
+     * Process a Short Locate Quote Response message (MsgType=S).
+     * Per DAS spec:
+     * - Tag 131 = QuoteReqID (echoed back from request)
+     * - Tag 133 = OfferPx (fee per share)
+     * - Tag 135 = OfferSize (available shares; <=0 means fail)
+     * - Tag 58 = Text (optional message)
      * 
-     * @param message The locate response message
+     * @param message The Short Locate Quote Response message (MsgType=S)
      * @param sessionID The FIX session ID
      */
     public void processLocateResponse(Message message, SessionID sessionID) {
         try {
             String msgType = message.getHeader().getString(MsgType.FIELD);
             
-            // Check if this is a locate response
-            // Note: FIX 4.2 may use "M" for LocateResponse, or custom message types
-            if (!"M".equals(msgType)) {
-                log.trace("Not a locate response message (MsgType={}), ignoring", msgType);
+            // Check if this is a Short Locate Quote Response
+            if (!"S".equals(msgType)) {
+                log.trace("Not a Short Locate Quote Response (MsgType={}), ignoring", msgType);
                 return;
             }
 
-            // Extract LocateReqID to match with our request
-            // Note: FIX 4.2 may not have LocateReqID field, so we use ClOrdID
-            String locateReqId = null;
-            if (message.isSetField(ClOrdID.FIELD)) {
-                // Use ClOrdID as LocateReqID (some brokers use this)
-                locateReqId = message.getString(ClOrdID.FIELD);
+            // Extract QuoteReqID (tag 131) - this is echoed back from our request
+            String quoteReqId = null;
+            if (message.isSetField(quickfix.field.QuoteReqID.FIELD)) {
+                quoteReqId = message.getString(quickfix.field.QuoteReqID.FIELD);
+            } else if (message.isSetField(ClOrdID.FIELD)) {
+                // Fallback: some brokers might use ClOrdID
+                quoteReqId = message.getString(ClOrdID.FIELD);
             }
 
-            if (locateReqId == null || locateReqId.isBlank()) {
-                log.warn("Locate response missing LocateReqID/ClOrdID, cannot match to request");
+            if (quoteReqId == null || quoteReqId.isBlank()) {
+                log.warn("Short Locate Quote Response missing QuoteReqID (tag 131), cannot match to request");
                 return;
             }
 
-            // Extract response details
-            boolean approved = false;
-            BigDecimal availableQty = BigDecimal.ZERO;
-            String locateId = null;
+            // Extract OfferPx (tag 133) - fee per share
+            BigDecimal offerPx = null;
+            if (message.isSetField(quickfix.field.OfferPx.FIELD)) {
+                offerPx = BigDecimal.valueOf(message.getDouble(quickfix.field.OfferPx.FIELD));
+            }
+
+            // Extract OfferSize (tag 135) - available shares; <=0 means fail
+            BigDecimal offerSize = BigDecimal.ZERO;
+            if (message.isSetField(quickfix.field.OfferSize.FIELD)) {
+                offerSize = BigDecimal.valueOf(message.getDouble(quickfix.field.OfferSize.FIELD));
+            }
+
+            // Extract Text (tag 58) - optional message
             String responseMessage = null;
-
-            // Check for LocateStatus or similar field
-            // This may vary by broker - adjust based on your broker's FIX implementation
-            if (message.isSetField(OrdStatus.FIELD)) {
-                char status = message.getChar(OrdStatus.FIELD);
-                approved = (status == '0' || status == '1'); // NEW or PARTIALLY_FILLED might indicate approved
-            }
-
-            // Extract available quantity
-            if (message.isSetField(OrderQty.FIELD)) {
-                availableQty = BigDecimal.valueOf(message.getDouble(OrderQty.FIELD));
-            } else if (message.isSetField(LeavesQty.FIELD)) {
-                availableQty = BigDecimal.valueOf(message.getDouble(LeavesQty.FIELD));
-            }
-
-            // Extract locate ID (may be in OrderID or custom field)
-            if (message.isSetField(OrderID.FIELD)) {
-                locateId = message.getString(OrderID.FIELD);
-            }
-
-            // Extract response message
             if (message.isSetField(Text.FIELD)) {
                 responseMessage = message.getString(Text.FIELD);
             }
 
-            // If no explicit approval status, check if quantity > 0
-            if (!approved && availableQty.compareTo(BigDecimal.ZERO) > 0) {
-                approved = true;
-            }
-
-            log.info("Processing locate response: LocateReqID={}, Approved={}, AvailableQty={}, LocateID={}, Message={}", 
-                locateReqId, approved, availableQty, locateId, responseMessage);
+            log.info("Processing Short Locate Quote Response: QuoteReqID={}, OfferPx={}, OfferSize={}, Message={}", 
+                quoteReqId, offerPx, offerSize, responseMessage);
 
             // Process the locate response
             try {
-                shortOrderProcessingService.processLocateResponseByLocateReqId(
-                    locateReqId,
-                    approved,
-                    availableQty,
-                    locateId,
+                shortOrderProcessingService.processLocateResponseByQuoteReqId(
+                    quoteReqId,
+                    offerPx,
+                    offerSize,
                     responseMessage,
                     sessionID
                 );
             } catch (IllegalArgumentException e) {
-                log.warn("Cannot process locate response: LocateReqID={} not found. This may be a response for a different system or an old request.", 
-                    locateReqId);
+                log.warn("Cannot process locate response: QuoteReqID={} not found. This may be a response for a different system or an old request.", 
+                    quoteReqId);
             } catch (Exception e) {
-                log.error("Error processing locate response for LocateReqID={}", locateReqId, e);
+                log.error("Error processing locate response for QuoteReqID={}", quoteReqId, e);
             }
 
         } catch (FieldNotFound e) {
-            log.warn("Error processing locate response: missing required field", e);
+            log.warn("Error processing Short Locate Quote Response: missing required field", e);
         } catch (Exception e) {
-            log.error("Error processing locate response", e);
+            log.error("Error processing Short Locate Quote Response", e);
         }
     }
 }

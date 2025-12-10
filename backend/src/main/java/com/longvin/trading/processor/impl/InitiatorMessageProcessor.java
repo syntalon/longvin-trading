@@ -139,9 +139,9 @@ public class InitiatorMessageProcessor implements FixMessageProcessor {
         try {
             String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
             
-            // Handle locate responses (MsgType="M" or custom)
-            if ("M".equals(msgType)) {
-                log.debug("Received locate response on initiator session {}", sessionID);
+            // Handle Short Locate Quote Response (MsgType="S")
+            if ("S".equals(msgType)) {
+                log.debug("Received Short Locate Quote Response on initiator session {}", sessionID);
                 locateResponseHandler.processLocateResponse(message, sessionID);
             }
             // Other application messages can be handled here if needed

@@ -33,11 +33,14 @@ public class ShortOrderProcessingService {
 
     private final LocateRequestRepository locateRequestRepository;
     private final ShortLocateCoordinator shortLocateCoordinator;
+    private final ShortOrderPlacementService placementService;
 
     public ShortOrderProcessingService(LocateRequestRepository locateRequestRepository,
-                                       ShortLocateCoordinator shortLocateCoordinator) {
+                                       ShortLocateCoordinator shortLocateCoordinator,
+                                       ShortOrderPlacementService placementService) {
         this.locateRequestRepository = locateRequestRepository;
         this.shortLocateCoordinator = shortLocateCoordinator;
+        this.placementService = placementService;
     }
 
     /**
@@ -63,13 +66,19 @@ public class ShortOrderProcessingService {
             symbol, quantity, order.getId());
 
         // Create locate request entity
+        // Generate QuoteReqID (tag 131) - format: LOCATE_SYMBOL_GROUPID
+        String quoteReqId = String.format("LOCATE_%s_%s", symbol, 
+            order.getOrderGroup() != null ? order.getOrderGroup().getId().toString().substring(0, 8) 
+            : UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+        
         LocateRequest locateRequest = LocateRequest.builder()
             .order(order)
+            .orderGroup(order.getOrderGroup() != null ? order.getOrderGroup() : null)
             .account(order.getAccount())
             .symbol(symbol)
             .quantity(quantity)
             .status(LocateRequest.LocateStatus.PENDING)
-            .fixLocateReqId("LOC-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase())
+            .fixQuoteReqId(quoteReqId)
             .build();
 
         // Persist locate request
@@ -112,22 +121,38 @@ public class ShortOrderProcessingService {
                 }
             }
 
-            // Create a custom message for locate request
-            // Note: This may need to be adapted based on your broker's FIX implementation
-            // Some brokers use custom message types or specific fields
-            // For FIX 4.2, we'll use ClOrdID as the locate request ID
+            // Create Short Locate Quote Request (MsgType=R) per DAS spec
+            // Tag 131 = QuoteReqID (our ID, echoed back in response)
+            // Tag 55 = Symbol
+            // Tag 38 = OrderQty (requested locate size)
+            // Tag 1 = Account
+            // Tag 100 = ExDestination (locate route)
             Message locateMsg = new Message();
-            locateMsg.getHeader().setString(MsgType.FIELD, "L"); // LocateRequest (if supported)
-            locateMsg.setString(ClOrdID.FIELD, locateRequest.getFixLocateReqId());
+            locateMsg.getHeader().setString(MsgType.FIELD, "R"); // Short Locate Quote Request
+            
+            // Tag 131: QuoteReqID (our request ID, will be echoed back)
+            if (locateRequest.getFixQuoteReqId() != null) {
+                locateMsg.setString(quickfix.field.QuoteReqID.FIELD, locateRequest.getFixQuoteReqId());
+            } else {
+                // Fallback: use ClOrdID if QuoteReqID not set
+                locateMsg.setString(ClOrdID.FIELD, locateRequest.getFixQuoteReqId() != null 
+                    ? locateRequest.getFixQuoteReqId() 
+                    : "LOC-" + System.currentTimeMillis());
+            }
+            
             locateMsg.setString(Symbol.FIELD, locateRequest.getSymbol());
             locateMsg.setDouble(OrderQty.FIELD, locateRequest.getQuantity().doubleValue());
             locateMsg.setString(quickfix.field.Account.FIELD, locateRequest.getAccount().getAccountNumber());
-            // TransactTime is optional for locate requests, skip for now
-            // locateMsg.setUtcTimeStamp(TransactTime.FIELD, new java.util.Date());
+            
+            // Tag 100: ExDestination (locate route) - if configured
+            if (locateRequest.getLocateRoute() != null && !locateRequest.getLocateRoute().isEmpty()) {
+                locateMsg.setString(ExDestination.FIELD, locateRequest.getLocateRoute());
+            }
 
             session.send(locateMsg);
-            log.info("Sent locate request: LocateReqID={}, Symbol={}, Qty={}, Retry={}", 
-                locateRequest.getFixLocateReqId(), locateRequest.getSymbol(), locateRequest.getQuantity(), retryCount);
+            log.info("Sent Short Locate Quote Request (MsgType=R): QuoteReqID={}, Symbol={}, Qty={}, Route={}, Retry={}", 
+                locateRequest.getFixQuoteReqId(), locateRequest.getSymbol(), locateRequest.getQuantity(), 
+                locateRequest.getLocateRoute(), retryCount);
             
             return true;
 
@@ -169,8 +194,8 @@ public class ShortOrderProcessingService {
     @Transactional
     public void processLocateResponse(UUID locateRequestId,
                                      boolean approved,
-                                     BigDecimal availableQty,
-                                     String locateId,
+                                     BigDecimal offerPx,
+                                     BigDecimal offerSize,
                                      String responseMessage,
                                      SessionID initiatorSessionID) {
         LocateRequest locateRequest = locateRequestRepository.findById(locateRequestId)
@@ -179,12 +204,12 @@ public class ShortOrderProcessingService {
         // Check if already processed
         if (locateRequest.getStatus() != LocateRequest.LocateStatus.PENDING) {
             log.warn("Locate request {} already processed with status {}, ignoring response", 
-                locateRequest.getFixLocateReqId(), locateRequest.getStatus());
+                locateRequest.getFixQuoteReqId(), locateRequest.getStatus());
             return;
         }
         
-        log.info("Processing locate response: LocateReqID={}, Approved={}, AvailableQty={}, LocateID={}", 
-            locateRequest.getFixLocateReqId(), approved, availableQty, locateId);
+        log.info("Processing Short Locate Quote Response: QuoteReqID={}, Approved={}, OfferPx={}, OfferSize={}", 
+            locateRequest.getFixQuoteReqId(), approved, offerPx, offerSize);
 
         if (!approved) {
             locateRequest.setStatus(LocateRequest.LocateStatus.REJECTED);
@@ -195,42 +220,43 @@ public class ShortOrderProcessingService {
             return;
         }
 
-        if (availableQty == null || availableQty.compareTo(BigDecimal.ZERO) <= 0) {
+        // Update locate request with quote response data
+        locateRequest.setOfferPx(offerPx);
+        locateRequest.setOfferSize(offerSize);
+        if (responseMessage != null) {
+            locateRequest.setResponseMessage(responseMessage);
+        }
+
+        if (!approved || offerSize == null || offerSize.compareTo(BigDecimal.ZERO) <= 0) {
+            // Locate rejected: OfferSize <= 0
             locateRequest.setStatus(LocateRequest.LocateStatus.REJECTED);
-            locateRequest.setResponseMessage("Invalid available quantity: " + availableQty);
+            locateRequest.setApprovedQty(BigDecimal.ZERO);
             locateRequestRepository.save(locateRequest);
-            log.warn("Locate request rejected: invalid available quantity");
-            notifyLocateFailure(locateRequest, "Invalid available quantity");
+            log.warn("Locate quote rejected: OfferSize={}, Message={}", offerSize, responseMessage);
+            notifyLocateFailure(locateRequest, responseMessage != null ? responseMessage : "Locate rejected (OfferSize <= 0)");
             return;
         }
 
-        if (availableQty.compareTo(locateRequest.getQuantity()) < 0) {
-            locateRequest.setStatus(LocateRequest.LocateStatus.REJECTED);
-            locateRequest.setResponseMessage("Insufficient quantity available. Requested: " +
-                locateRequest.getQuantity() + ", Available: " + availableQty);
-            locateRequestRepository.save(locateRequest);
-            log.warn("Locate request rejected: insufficient quantity (requested: {}, available: {})",
-                locateRequest.getQuantity(), availableQty);
-            notifyLocateFailure(locateRequest, "Insufficient locate quantity");
-            return;
-        }
+        // Determine if full or partial approval
+        boolean isFullApproval = offerSize.compareTo(locateRequest.getQuantity()) >= 0;
+        BigDecimal approvedQty = offerSize.compareTo(locateRequest.getQuantity()) > 0 
+            ? locateRequest.getQuantity() 
+            : offerSize;
 
         try {
             // Update locate request status
-            locateRequest.setStatus(LocateRequest.LocateStatus.APPROVED);
-            locateRequest.setAvailableQty(availableQty);
-            locateRequest.setLocateId(locateId);
-            if (responseMessage != null) {
-                locateRequest.setResponseMessage(responseMessage);
+            if (isFullApproval) {
+                locateRequest.setStatus(LocateRequest.LocateStatus.APPROVED_FULL);
+            } else {
+                locateRequest.setStatus(LocateRequest.LocateStatus.APPROVED_PARTIAL);
             }
+            locateRequest.setApprovedQty(approvedQty);
             locateRequestRepository.save(locateRequest);
 
-            // Borrow the stock
-            borrowStock(locateRequest);
-
-            notifyLocateSuccess(locateRequest, availableQty, locateId, responseMessage);
+            // Notify success and trigger shadow order placement
+            notifyLocateSuccess(locateRequest, approvedQty, offerPx, responseMessage, initiatorSessionID);
         } catch (Exception e) {
-            log.error("Error processing locate response for LocateReqID={}", locateRequest.getFixLocateReqId(), e);
+            log.error("Error processing locate response for QuoteReqID={}", locateRequest.getFixQuoteReqId(), e);
             // Update status to indicate error
             locateRequest.setStatus(LocateRequest.LocateStatus.REJECTED);
             locateRequest.setResponseMessage("Error processing locate response: " + e.getMessage());
@@ -240,37 +266,23 @@ public class ShortOrderProcessingService {
     }
     
     /**
-     * Process locate response by LocateReqID (FIX LocateReqID).
+     * Process locate response by QuoteReqID (tag 131).
      */
     @Transactional
-    public void processLocateResponseByLocateReqId(String fixLocateReqId,
-                                                   boolean approved,
-                                                   BigDecimal availableQty,
-                                                   String locateId,
-                                                   String responseMessage,
-                                                   SessionID initiatorSessionID) {
-        LocateRequest locateRequest = locateRequestRepository.findByFixLocateReqId(fixLocateReqId)
-            .orElseThrow(() -> new IllegalArgumentException("LocateRequest not found: " + fixLocateReqId));
+    public void processLocateResponseByQuoteReqId(String fixQuoteReqId,
+                                                 BigDecimal offerPx,
+                                                 BigDecimal offerSize,
+                                                 String responseMessage,
+                                                 SessionID initiatorSessionID) {
+        LocateRequest locateRequest = locateRequestRepository.findByFixQuoteReqId(fixQuoteReqId)
+            .orElseThrow(() -> new IllegalArgumentException("LocateRequest not found: " + fixQuoteReqId));
         
-        processLocateResponse(locateRequest.getId(), approved, availableQty, locateId, responseMessage, initiatorSessionID);
+        // Determine approval status: offerSize > 0 means approved
+        boolean approved = offerSize != null && offerSize.compareTo(BigDecimal.ZERO) > 0;
+        
+        processLocateResponse(locateRequest.getId(), approved, offerPx, offerSize, responseMessage, initiatorSessionID);
     }
 
-    /**
-     * Borrow the stock (update locate request status to BORROWED).
-     * In a real implementation, this might involve additional broker API calls.
-     */
-    @Transactional
-    private void borrowStock(LocateRequest locateRequest) {
-        log.info("Borrowing stock: Symbol={}, Qty={}, LocateID={}",
-            locateRequest.getSymbol(), locateRequest.getQuantity(), locateRequest.getLocateId());
-
-        locateRequest.setStatus(LocateRequest.LocateStatus.BORROWED);
-        locateRequest.setBorrowedQty(locateRequest.getQuantity());
-        locateRequestRepository.save(locateRequest);
-
-        log.info("Stock borrowed successfully: Symbol={}, Qty={}",
-            locateRequest.getSymbol(), locateRequest.getBorrowedQty());
-    }
 
     /**
      * Notify locate failure to the coordinator.
@@ -283,12 +295,17 @@ public class ShortOrderProcessingService {
     }
 
     /**
-     * Notify locate success to the coordinator.
+     * Notify locate success to the coordinator and trigger shadow order placement.
      */
-    private void notifyLocateSuccess(LocateRequest locateRequest, BigDecimal approvedQty, String locateId, String message) {
+    private void notifyLocateSuccess(LocateRequest locateRequest, BigDecimal approvedQty, BigDecimal offerPx,
+                                    String message, SessionID initiatorSessionID) {
         String primaryOrderId = resolvePrimaryOrderId(locateRequest);
         if (primaryOrderId != null) {
-            shortLocateCoordinator.completeSuccess(primaryOrderId, approvedQty, locateId, message);
+            // Use QuoteReqID as locateId for coordinator
+            shortLocateCoordinator.completeSuccess(primaryOrderId, approvedQty, locateRequest.getFixQuoteReqId(), message);
+            
+            // Trigger shadow order placement after locate success
+            placementService.onLocateSuccess(primaryOrderId, approvedQty, locateRequest.getFixQuoteReqId(), initiatorSessionID);
         }
     }
 

@@ -2,8 +2,6 @@ package com.longvin.trading.service;
 
 import com.longvin.trading.config.FixClientProperties;
 import com.longvin.trading.entities.orders.Order;
-import com.longvin.trading.service.OrderPersistenceService;
-import com.longvin.trading.service.ShortOrderProcessingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -20,6 +18,7 @@ import quickfix.fix42.OrderCancelRequest;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -41,17 +40,20 @@ public class DropCopyReplicationService {
     private final Executor executor;
     private final ShortOrderProcessingService shortOrderProcessingService;
     private final OrderPersistenceService orderPersistenceService;
+    private final ShortOrderDraftService draftService;
     private final ConcurrentMap<String, PrimaryOrderState> primaryOrders = new ConcurrentHashMap<>();
     private final Set<String> processedExecIds = ConcurrentHashMap.newKeySet();
     
     public DropCopyReplicationService(FixClientProperties properties,
                                      @Qualifier("orderMirroringExecutor") Executor executor,
                                      ShortOrderProcessingService shortOrderProcessingService,
-                                     OrderPersistenceService orderPersistenceService) {
+                                     OrderPersistenceService orderPersistenceService,
+                                     ShortOrderDraftService draftService) {
         this.properties = Objects.requireNonNull(properties, "properties must not be null");
         this.executor = Objects.requireNonNull(executor, "executor must not be null");
         this.shortOrderProcessingService = Objects.requireNonNull(shortOrderProcessingService, "shortOrderProcessingService must not be null");
         this.orderPersistenceService = Objects.requireNonNull(orderPersistenceService, "orderPersistenceService must not be null");
+        this.draftService = Objects.requireNonNull(draftService, "draftService must not be null");
     }
     
     /**
@@ -134,9 +136,10 @@ public class DropCopyReplicationService {
             log.info("Detected short order for orderId={}, symbol={}, side={}, qty={}", 
                 orderId, state.symbol, state.side, state.orderQty);
             
-            // Process short order with locate request workflow
-            // Note: This requires Order entity to be created first from the ExecutionReport
-            // For now, we'll trigger the locate request process
+            // Step 1: Create draft orders for shadow accounts immediately
+            createDraftOrdersForShortOrder(orderId);
+            
+            // Step 2: Send locate request to check stock availability
             processShortOrderWithLocate(state, account, orderId, initiatorSessionID);
         } else {
             // Regular order - replicate directly to shadows
@@ -144,6 +147,27 @@ public class DropCopyReplicationService {
         }
     }
     
+    /**
+     * Create draft orders for shadow accounts when a short order is detected.
+     * These orders will be sent after locate is approved and stock is borrowed.
+     */
+    private void createDraftOrdersForShortOrder(String orderId) {
+        try {
+            Optional<Order> primaryOrderOpt = orderPersistenceService.getOrderByFixOrderId(orderId);
+            if (primaryOrderOpt.isEmpty()) {
+                log.warn("Primary order not found for orderId={}, cannot create draft orders", orderId);
+                return;
+            }
+
+            Order primaryOrder = primaryOrderOpt.get();
+            List<Order> draftOrders = draftService.createDraftOrdersForShadowAccounts(primaryOrder);
+            log.info("Created {} draft orders for shadow accounts based on primary order {}", 
+                draftOrders.size(), orderId);
+        } catch (Exception e) {
+            log.error("Error creating draft orders for short order orderId={}", orderId, e);
+        }
+    }
+
     /**
      * Process a short order: send locate request, wait for response, borrow stock, then place shadow orders.
      */

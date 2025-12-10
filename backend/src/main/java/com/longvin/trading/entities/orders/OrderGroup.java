@@ -32,11 +32,31 @@ public class OrderGroup {
     private UUID id;
 
     /**
-     * Strategy or group identifier (e.g., "OPAL_GROUP_1", "DAS_STRATEGY_A")
+     * Strategy or group identifier (e.g., "TSLA_SHORT_FAN_001")
      * Can be used to group orders by trading strategy or replication strategy.
      */
     @Column(name = "strategy_key", length = 100)
     private String strategyKey;
+
+    /**
+     * Symbol for this order group.
+     */
+    @Column(name = "symbol", length = 50)
+    private String symbol;
+
+    /**
+     * Total target quantity across all accounts in this group.
+     */
+    @Column(name = "total_target_qty", precision = 18, scale = 8)
+    private java.math.BigDecimal totalTargetQty;
+
+    /**
+     * State of the order group.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "state", length = 30)
+    @Builder.Default
+    private GroupState state = GroupState.LOCATE_PENDING;
 
     /**
      * The primary order in this group (the original order from DAS Trader).
@@ -72,6 +92,19 @@ public class OrderGroup {
             orders.add(order);
             order.setOrderGroup(this);
         }
+    }
+
+    /**
+     * State machine for order groups.
+     */
+    public enum GroupState {
+        LOCATE_PENDING,             // Waiting for locate quote response
+        LOCATE_FAILED,              // Locate rejected or insufficient
+        LOCATE_APPROVED_PARTIAL,    // Partial locate approved
+        LOCATE_APPROVED_FULL,       // Full locate approved
+        REPLICATING_ORDERS,         // Placing orders for shadow accounts
+        ACTIVE,                     // All orders placed, group active
+        CLOSED                      // All orders filled or cancelled
     }
 }
 

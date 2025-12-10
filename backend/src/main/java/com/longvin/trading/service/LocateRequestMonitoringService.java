@@ -41,16 +41,16 @@ public class LocateRequestMonitoringService {
     @Transactional
     public void checkExpiredLocateRequests() {
         try {
-            List<LocateRequest> pendingRequests = locateRequestRepository.findAll()
-                .stream()
-                .filter(lr -> lr.getStatus() == LocateRequest.LocateStatus.PENDING)
-                .filter(this::isExpired)
-                .toList();
+            LocalDateTime expirationThreshold = LocalDateTime.now().minus(LOCATE_REQUEST_TIMEOUT);
+            List<LocateRequest> expiredRequests = locateRequestRepository.findByStatusAndCreatedAtBefore(
+                LocateRequest.LocateStatus.PENDING,
+                expirationThreshold
+            );
 
-            if (!pendingRequests.isEmpty()) {
-                log.warn("Found {} expired locate requests", pendingRequests.size());
+            if (!expiredRequests.isEmpty()) {
+                log.warn("Found {} expired locate requests", expiredRequests.size());
                 
-                for (LocateRequest request : pendingRequests) {
+                for (LocateRequest request : expiredRequests) {
                     markAsExpired(request);
                 }
             }
@@ -59,25 +59,13 @@ public class LocateRequestMonitoringService {
         }
     }
 
-    /**
-     * Check if a locate request has expired.
-     */
-    private boolean isExpired(LocateRequest request) {
-        LocalDateTime createdAt = request.getCreatedAt();
-        if (createdAt == null) {
-            return false;
-        }
-        
-        Duration age = Duration.between(createdAt, LocalDateTime.now());
-        return age.compareTo(LOCATE_REQUEST_TIMEOUT) > 0;
-    }
 
     /**
      * Mark a locate request as expired.
      */
     private void markAsExpired(LocateRequest request) {
-        log.warn("Marking locate request as EXPIRED: LocateReqID={}, Symbol={}, Qty={}, Age={}s", 
-            request.getFixLocateReqId(), 
+        log.warn("Marking locate request as EXPIRED: QuoteReqID={}, Symbol={}, Qty={}, Age={}s", 
+            request.getFixQuoteReqId(), 
             request.getSymbol(), 
             request.getQuantity(),
             Duration.between(request.getCreatedAt(), LocalDateTime.now()).getSeconds());
