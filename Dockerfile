@@ -77,6 +77,9 @@ EXPOSE 8081
 # Set JVM options for containerized environment
 ENV JAVA_OPTS="-Xmx512m -Xms256m -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
 
+# Set Spring profile to production
+ENV SPRING_PROFILES_ACTIVE=prod
+
 # Run the application
 ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
 

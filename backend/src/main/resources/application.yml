@@ -1,129 +1,131 @@
 # Default configuration (used when no profile is specified)
 # This acts as the production configuration
+# Environment variables can override these values using ${VARIABLE:default} syntax
 spring:
   application:
     name: LongvinTradingBackend
   datasource:
-    url: jdbc:postgresql://dev-chia.postgres.database.azure.com:5432/dev_svc_longvin?sslmode=require&connectTimeout=60&socketTimeout=60&loginTimeout=30&currentSchema=svc_longvin
+    url: jdbc:postgresql://${DB_HOST:dev-chia.postgres.database.azure.com}:${DB_PORT:5432}/${DB_NAME:dev_svc_longvin}?sslmode=${DB_SSLMODE:require}&connectTimeout=60&socketTimeout=60&loginTimeout=30&currentSchema=${DB_SCHEMA:svc_longvin}
     driver-class-name: org.postgresql.Driver
-    username: svc_longvin_user
-    password: syntalon@123
+    username: ${DB_USERNAME:svc_longvin_user}
+    password: ${DB_PASSWORD:syntalon@123}
     hikari:
-      connection-timeout: 60000
-      maximum-pool-size: 5
-      minimum-idle: 1
-      idle-timeout: 300000
-      max-lifetime: 1200000
-      leak-detection-threshold: 60000
-      schema: svc_longvin
+      connection-timeout: ${DB_CONNECTION_TIMEOUT:60000}
+      maximum-pool-size: ${DB_MAX_POOL_SIZE:5}
+      minimum-idle: ${DB_MIN_IDLE:1}
+      idle-timeout: ${DB_IDLE_TIMEOUT:300000}
+      max-lifetime: ${DB_MAX_LIFETIME:1200000}
+      leak-detection-threshold: ${DB_LEAK_DETECTION_THRESHOLD:60000}
+      schema: ${DB_SCHEMA:svc_longvin}
   jpa:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
       ddl-auto: validate  # Use Flyway for migrations, validate schema matches entities
-    show-sql: false
+    show-sql: ${JPA_SHOW_SQL:false}
     properties:
       hibernate:
         format_sql: true
-        default_schema: svc_longvin
+        default_schema: ${DB_SCHEMA:svc_longvin}
   flyway:
-    enabled: true
+    enabled: ${FLYWAY_ENABLED:true}
     locations: classpath:db/migration
-    baseline-on-migrate: true
-    baseline-version: 0
-    schemas: svc_longvin
-    default-schema: svc_longvin
+    baseline-on-migrate: ${FLYWAY_BASELINE_ON_MIGRATE:true}
+    baseline-version: ${FLYWAY_BASELINE_VERSION:0}
+    schemas: ${DB_SCHEMA:svc_longvin}
+    default-schema: ${DB_SCHEMA:svc_longvin}
     # PostgreSQL 17 support
     database-type: postgresql
 
 server:
-  port: 8081
+  port: ${SERVER_PORT:8081}
 
 logging:
   file:
-    name: logs/application.log
-    max-size: 10MB
-    max-history: 30
+    name: ${LOGGING_FILE_NAME:logs/application.log}
+    max-size: ${LOGGING_FILE_MAX_SIZE:10MB}
+    max-history: ${LOGGING_FILE_MAX_HISTORY:30}
   level:
-    quickfix: DEBUG
-    quickfix.mina: DEBUG
-    com.longvin.trading.fix: DEBUG
+    quickfix: ${LOG_LEVEL_QUICKFIX:DEBUG}
+    quickfix.mina: ${LOG_LEVEL_QUICKFIX_MINA:DEBUG}
+    com.longvin.trading.fix: ${LOG_LEVEL_FIX:DEBUG}
 
 trading:
   initiator:
-    non-trading-resume-hour: 6
+    non-trading-resume-hour: ${TRADING_NON_TRADING_RESUME_HOUR:6}
   fix:
-    enabled: true
-    config-path: classpath:fix/das-mirror-trading.cfg
-    primary-session: OS111
-    drop-copy-session-sender-comp-id: OS111
-    drop-copy-session-target-comp-id: DAST
-    primary-account: PRIMARY_ACCOUNT
-    shadow-sessions: SHADOW1,SHADOW2
+    enabled: ${FIX_ENABLED:true}
+    config-path: ${FIX_CONFIG_PATH:classpath:fix/das-mirror-trading.cfg}
+    primary-session: ${FIX_PRIMARY_SESSION:OS111}
+    drop-copy-session-sender-comp-id: ${FIX_DROP_COPY_SENDER_COMP_ID:OS111}
+    drop-copy-session-target-comp-id: ${FIX_DROP_COPY_TARGET_COMP_ID:DAST}
+    primary-account: ${FIX_PRIMARY_ACCOUNT:PRIMARY_ACCOUNT}
+    shadow-sessions: ${FIX_SHADOW_SESSIONS:SHADOW1,SHADOW2}
     shadow-accounts:
-      SHADOW1: SHADOW_ACCOUNT_1
-      SHADOW2: SHADOW_ACCOUNT_2
+      SHADOW1: ${FIX_SHADOW_ACCOUNT_1:SHADOW_ACCOUNT_1}
+      SHADOW2: ${FIX_SHADOW_ACCOUNT_2:SHADOW_ACCOUNT_2}
     shadow-account-policies:
       SHADOW1:
-        ratio: 5.0
-        replenish-window: PT2M
-        holding-window: PT3M
-        partial-cancel-window: PT30S
+        ratio: ${FIX_SHADOW1_RATIO:5.0}
+        replenish-window: ${FIX_SHADOW1_REPLENISH_WINDOW:PT2M}
+        holding-window: ${FIX_SHADOW1_HOLDING_WINDOW:PT3M}
+        partial-cancel-window: ${FIX_SHADOW1_PARTIAL_CANCEL_WINDOW:PT30S}
       SHADOW2:
-        ratio: 1.0
-        replenish-window: PT2M
-        holding-window: PT2M
-        partial-cancel-window: PT20S
-    cl-ord-id-prefix: MIRROR-
+        ratio: ${FIX_SHADOW2_RATIO:1.0}
+        replenish-window: ${FIX_SHADOW2_REPLENISH_WINDOW:PT2M}
+        holding-window: ${FIX_SHADOW2_HOLDING_WINDOW:PT2M}
+        partial-cancel-window: ${FIX_SHADOW2_PARTIAL_CANCEL_WINDOW:PT20S}
+    cl-ord-id-prefix: ${FIX_CL_ORD_ID_PREFIX:MIRROR-}
 ---
 # Production profile configuration
 # This is the default profile for production use
+# Environment variables can override these values
 spring:
   config:
     activate:
       on-profile: prod
   datasource:
-    url: jdbc:postgresql://dev-chia.postgres.database.azure.com:5432/dev_svc_longvin?sslmode=require&connectTimeout=60&socketTimeout=60&loginTimeout=30&currentSchema=svc_longvin
+    url: jdbc:postgresql://${DB_HOST:dev-chia.postgres.database.azure.com}:${DB_PORT:5432}/${DB_NAME:dev_svc_longvin}?sslmode=${DB_SSLMODE:require}&connectTimeout=60&socketTimeout=60&loginTimeout=30&currentSchema=${DB_SCHEMA:svc_longvin}
     driver-class-name: org.postgresql.Driver
-    username: svc_longvin_user
-    password: syntalon@123
+    username: ${DB_USERNAME:svc_longvin_user}
+    password: ${DB_PASSWORD:syntalon@123}
     hikari:
-      connection-timeout: 60000
-      maximum-pool-size: 5
-      minimum-idle: 1
-      idle-timeout: 300000
-      max-lifetime: 1200000
-      leak-detection-threshold: 60000
-      schema: svc_longvin
+      connection-timeout: ${DB_CONNECTION_TIMEOUT:60000}
+      maximum-pool-size: ${DB_MAX_POOL_SIZE:5}
+      minimum-idle: ${DB_MIN_IDLE:1}
+      idle-timeout: ${DB_IDLE_TIMEOUT:300000}
+      max-lifetime: ${DB_MAX_LIFETIME:1200000}
+      leak-detection-threshold: ${DB_LEAK_DETECTION_THRESHOLD:60000}
+      schema: ${DB_SCHEMA:svc_longvin}
   jpa:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
       ddl-auto: validate  # Use Flyway for migrations
-    show-sql: false
+    show-sql: ${JPA_SHOW_SQL:false}
     properties:
       hibernate:
         format_sql: true
-        default_schema: svc_longvin
+        default_schema: ${DB_SCHEMA:svc_longvin}
   flyway:
-    enabled: true
+    enabled: ${FLYWAY_ENABLED:true}
     locations: classpath:db/migration
-    baseline-on-migrate: true
-    schemas: svc_longvin
-    default-schema: svc_longvin
+    baseline-on-migrate: ${FLYWAY_BASELINE_ON_MIGRATE:true}
+    schemas: ${DB_SCHEMA:svc_longvin}
+    default-schema: ${DB_SCHEMA:svc_longvin}
     database-type: postgresql
     # Note: Schema must be created manually by admin using SETUP_SCHEMA.sql
     # The migration user (svc_longvin_user) doesn't have permission to create schemas
-    create-schemas: false
+    create-schemas: ${FLYWAY_CREATE_SCHEMAS:false}
 
 trading:
   fix:
     # Production FIX config (explicit, though already default)
-    config-path: classpath:fix/das-mirror-trading.cfg
+    config-path: ${FIX_CONFIG_PATH:classpath:fix/das-mirror-trading.cfg}
 
 logging:
   level:
-    com.longvin.trading: INFO
-    quickfix: INFO
-    quickfix.mina: WARN
+    com.longvin.trading: ${LOG_LEVEL_APP:INFO}
+    quickfix: ${LOG_LEVEL_QUICKFIX:INFO}
+    quickfix.mina: ${LOG_LEVEL_QUICKFIX_MINA:WARN}
 
 ---
 # Test profile configuration
