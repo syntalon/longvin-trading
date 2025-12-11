@@ -1,0 +1,48 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+*.txt
+*.docx
+
+# IDE
+.idea
+.vscode
+*.iml
+*.iws
+*.ipr
+.project
+.classpath
+.settings
+
+# Build artifacts (will be built in Docker)
+target/
+backend/target/
+ui/dist/
+ui/node_modules/
+node_modules/
+
+# Logs
+logs/
+*.log
+*.log.*
+
+# Maven
+.mvn/wrapper/maven-wrapper.jar
+
+# OS
+.DS_Store
+Thumbs.db
+
+# CI/CD
+.github/
+
+# Simulator (not needed for production build)
+simulator/
+
+# QuickFix store files
+target/quickfix/
+

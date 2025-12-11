@@ -1,0 +1,32 @@
+services:
+  longvin-trading:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: longvin-trading
+    ports:
+      - "8081:8081"
+    environment:
+      # Database configuration
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/dev_svc_longvin?sslmode=disable&connectTimeout=60&socketTimeout=60&loginTimeout=30&currentSchema=svc_longvin
+      SPRING_DATASOURCE_USERNAME: svc_longvin_user
+      SPRING_DATASOURCE_PASSWORD: syntalon@123
+      # JPA/Hibernate configuration
+      SPRING_JPA_HIBERNATE_DEFAULT_SCHEMA: svc_longvin
+      # Flyway configuration
+      SPRING_FLYWAY_SCHEMAS: svc_longvin
+      SPRING_FLYWAY_DEFAULT_SCHEMA: svc_longvin
+      SPRING_FLYWAY_BASELINE_ON_MIGRATE: "true"
+      SPRING_FLYWAY_BASELINE_VERSION: "0"
+      # Server configuration
+      SERVER_PORT: 8081
+      # Logging
+      LOGGING_FILE_NAME: logs/application.log
+      # Java options (can be overridden)
+      JAVA_OPTS: "-Xmx512m -Xms256m -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
+    volumes:
+      - app_logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
