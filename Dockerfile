@@ -27,12 +27,13 @@ WORKDIR /app
 COPY pom.xml mvnw ./
 COPY .mvn .mvn
 
-# Copy UI module POM (needed for Maven build)
+# Copy all module POMs (Maven needs them to parse the parent POM)
 COPY ui/pom.xml ./ui/
+COPY backend/pom.xml ./backend/
+COPY simulator/pom.xml ./simulator/
 
 # Copy all source code (UI build output will be used from previous stage)
 COPY --from=ui-builder /app/ui/dist ./ui/dist
-COPY backend/pom.xml ./backend/
 COPY backend/src ./backend/src
 
 # Build the backend (Maven will use the pre-built UI from ui/dist)
