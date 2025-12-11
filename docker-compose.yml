@@ -13,9 +13,11 @@ services:
       DB_PORT: 5432
       DB_NAME: dev_svc_longvin
       DB_SCHEMA: svc_longvin
-      DB_USERNAME: svc_longvin_user
+      # Azure PostgreSQL Single Server requires username@servername format
+      # For Flexible Server, use just the username without @servername
+      DB_USERNAME: svc_longvin_user@dev-chia
       DB_PASSWORD: syntalon@123
-      DB_SSLMODE: disable
+      DB_SSLMODE: require
       # Server configuration
       SERVER_PORT: 8081
       # Logging
