@@ -40,8 +40,13 @@ Thumbs.db
 # CI/CD
 .github/
 
-# Simulator (not needed for production build)
-simulator/
+# Simulator (exclude everything except pom.xml which is needed for Maven)
+simulator/src/
+simulator/target/
+simulator/*.md
+simulator/README.md
+simulator/QUICK_START.md
+simulator/TESTING_EXECUTION_REPORTS.md
 
 # QuickFix store files
 target/quickfix/
