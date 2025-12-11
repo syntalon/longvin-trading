@@ -6,11 +6,20 @@ FROM node:20.16.0-alpine AS ui-builder
 
 WORKDIR /app/ui
 
+# Configure npm for better performance and reliability
+RUN npm config set fetch-retries 5 && \
+    npm config set fetch-retry-mintimeout 20000 && \
+    npm config set fetch-retry-maxtimeout 120000 && \
+    npm config set progress true && \
+    npm config set loglevel info
+
 # Copy UI package files
 COPY ui/package*.json ./
 
 # Install dependencies
-RUN npm ci
+# Note: For BuildKit support, use: DOCKER_BUILDKIT=1 docker build ...
+# With BuildKit, cache mount can be used: --mount=type=cache,target=/root/.npm
+RUN npm ci --prefer-offline --no-audit --progress --verbose
 
 # Copy UI source code
 COPY ui/ ./
