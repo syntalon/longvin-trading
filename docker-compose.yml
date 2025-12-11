@@ -1,9 +1,8 @@
 services:
   longvin-trading:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: syntaloneu-ejdfabeyb9b7buha.azurecr.io/longvin-trading:latest
     container_name: longvin-trading
+    hostname: Modify Selected Code…
     ports:
       - "8081:8081"
     environment:
