@@ -24,6 +24,4 @@ services:
       LOGGING_FILE_NAME: logs/application.log
       # Java options (can be overridden)
       JAVA_OPTS: "-Xmx512m -Xms256m -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
-    volumes:
-      - app_logs:./app/logs
     restart: unless-stopped
