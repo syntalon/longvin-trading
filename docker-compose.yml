@@ -26,7 +26,4 @@ services:
       JAVA_OPTS: "-Xmx512m -Xms256m -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
     volumes:
       - app_logs:/app/logs
-    depends_on:
-      postgres:
-        condition: service_healthy
     restart: unless-stopped
