@@ -32,11 +32,21 @@ COPY ui/pom.xml ./ui/
 COPY backend/pom.xml ./backend/
 COPY simulator/pom.xml ./simulator/
 
-# Copy all source code (UI build output will be used from previous stage)
+# Copy UI source files (needed for frontend-maven-plugin to run npm install)
+# The plugin will install Node/npm and run npm install, but we'll use pre-built dist
+COPY ui/package*.json ./ui/
+COPY ui/angular.json ./ui/
+COPY ui/tsconfig*.json ./ui/
+COPY ui/src ./ui/src
+COPY ui/public ./ui/public
+
+# Copy pre-built UI dist (this will be overwritten by Maven but that's okay)
 COPY --from=ui-builder /app/ui/dist ./ui/dist
+
+# Copy backend source
 COPY backend/src ./backend/src
 
-# Build the backend (Maven will use the pre-built UI from ui/dist)
+# Build the backend (Maven will rebuild UI but that's acceptable)
 # The backend pom.xml is configured to copy UI assets during build
 RUN mvn clean package -DskipTests -pl backend -am
 
