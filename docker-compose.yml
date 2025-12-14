@@ -4,6 +4,7 @@ services:
     container_name: longvin-trading
     ports:
       - "8081:8081"
+      - "9877:9877"
     environment:
       # Spring profile
       SPRING_PROFILES_ACTIVE: prod
