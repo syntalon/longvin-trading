@@ -11,7 +11,7 @@ import quickfix.SessionID;
 
 @Component
 public class LocateOfferHandler implements ExecutionReportHandler {
-    private static final Logger log = LoggerFactory.getLogger(FillOrderHandler.class);
+    private static final Logger log = LoggerFactory.getLogger(LocateOfferHandler.class);
     private final FixMessageSender fixMessageSender;
     private final LocateDecisionService locateDecisionService;
     private final LocateRouteService locateRouteService; // 添加这个依赖
