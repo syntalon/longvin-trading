@@ -5,6 +5,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 import com.longvin.trading.config.FixClientProperties;
+import com.longvin.trading.executionReportHandler.ExecutionReportProcessor;
 import com.longvin.trading.processor.impl.LocateResponseHandler;
 import com.longvin.trading.service.DropCopyReplicationService;
 import com.longvin.trading.service.ShortOrderProcessingService;
@@ -12,22 +13,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import quickfix.FieldNotFound;
-import quickfix.IncorrectTagValue;
-import quickfix.Message;
-import quickfix.Session;
-import quickfix.SessionID;
-import quickfix.UnsupportedMessageType;
+import quickfix.*;
 import quickfix.field.Account;
 import quickfix.field.MsgType;
 import quickfix.field.OrdStatus;
 import quickfix.field.QuoteReqID;
 import quickfix.field.Text;
 import quickfix.field.ClOrdID;
-import quickfix.fix42.ExecutionReport;
-import quickfix.fix42.MessageCracker;
 import quickfix.fix42.NewOrderSingle;
-import quickfix.fix42.Quote;
 
 /**
  * Shared coordinator used by both acceptor and initiator QuickFIX/J Applications.
@@ -36,7 +29,7 @@ import quickfix.fix42.Quote;
 public class OrderReplicationCoordinator extends MessageCracker {
 
     private static final Logger log = LoggerFactory.getLogger(OrderReplicationCoordinator.class);
-
+    private final ExecutionReportProcessor executionReportProcessor;
     private final FixClientProperties properties;
     private final FixSessionRegistry sessionRegistry;
     private final DropCopyReplicationService dropCopyReplicationService;
@@ -53,13 +46,14 @@ public class OrderReplicationCoordinator extends MessageCracker {
                                        DropCopyReplicationService dropCopyReplicationService,
                                        LocateResponseHandler locateResponseHandler,
                                        ShortOrderProcessingService shortOrderProcessingService,
-                                       InitiatorLogonGuard initiatorLogonGuard) {
+                                       InitiatorLogonGuard initiatorLogonGuard,ExecutionReportProcessor executionReportProcessor) {
         this.properties = Objects.requireNonNull(properties, "properties must not be null");
         this.sessionRegistry = Objects.requireNonNull(sessionRegistry, "sessionRegistry must not be null");
         this.dropCopyReplicationService = Objects.requireNonNull(dropCopyReplicationService, "dropCopyReplicationService must not be null");
         this.locateResponseHandler = Objects.requireNonNull(locateResponseHandler, "locateResponseHandler must not be null");
         this.shortOrderProcessingService = Objects.requireNonNull(shortOrderProcessingService, "shortOrderProcessingService must not be null");
         this.initiatorLogonGuard = Objects.requireNonNull(initiatorLogonGuard, "initiatorLogonGuard must not be null");
+        this.executionReportProcessor = executionReportProcessor;
     }
 
     public void onCreate(SessionID sessionID, String connectionType) {
@@ -252,7 +246,7 @@ public class OrderReplicationCoordinator extends MessageCracker {
      * Drop-copy ExecutionReport handling: persist/replicate and drive short workflow.
      * Initiator ExecutionReport handling: locate confirmation (OrdStatus=B).
      */
-    @Override
+/*    @Override
     public void onMessage(ExecutionReport report, SessionID sessionID)
             throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
         if (isDropCopySession(sessionID)) {
@@ -279,37 +273,22 @@ public class OrderReplicationCoordinator extends MessageCracker {
             String text = report.isSetField(Text.FIELD) ? report.getString(Text.FIELD) : null;
             shortOrderProcessingService.processLocateConfirmationByQuoteReqId(quoteReqId, sessionID, text);
         }
-    }
+    }*/
 
-    /**
-     * Locate quote response (MsgType=S) comes in as FIX42 Quote.
-     */
-    @Override
-    public void onMessage(Quote quote, SessionID sessionID)
-            throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
-        locateResponseHandler.processLocateResponse(quote, sessionID);
-    }
-
-    /**
-     * Fallback for message types we don't explicitly handle.
-     * Keeps QuickFIX/J from treating unknown application messages as errors.
-     */
     @Override
     public void onMessage(Message message, SessionID sessionID)
             throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
-        // If it is MsgType=S but didn't parse as Quote for some reason, still handle it.
-        try {
-            String msgType = message.getHeader().getString(MsgType.FIELD);
-            if ("S".equals(msgType)) {
-                locateResponseHandler.processLocateResponse(message, sessionID);
-                return;
-            }
-        } catch (Exception ignored) {
-            // ignore
+        String msgType = message.getHeader().getString(MsgType.FIELD);
+
+        if (MsgType.EXECUTION_REPORT.equals(msgType)) {
+            // 处理Execution Report
+            executionReportProcessor.process(message, sessionID);
+        } else {
+            // 其他消息类型
+            crack(message, sessionID);
         }
-        // no-op
     }
-    
+
     /**
      * Check if the given session ID matches the drop copy acceptor session configuration.
      * Uses properties instead of hardcoded values.
