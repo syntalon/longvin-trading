@@ -5,9 +5,9 @@ import java.util.Objects;
 import java.util.Optional;
 
 import com.longvin.trading.config.FixClientProperties;
-import com.longvin.trading.processor.FixMessageProcessor;
-import com.longvin.trading.processor.FixMessageProcessorFactory;
-import com.longvin.trading.fix.FixSessionRegistry;
+import com.longvin.trading.processor.impl.LocateResponseHandler;
+import com.longvin.trading.service.DropCopyReplicationService;
+import com.longvin.trading.service.ShortOrderProcessingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -19,9 +19,15 @@ import quickfix.Session;
 import quickfix.SessionID;
 import quickfix.UnsupportedMessageType;
 import quickfix.field.Account;
+import quickfix.field.MsgType;
+import quickfix.field.OrdStatus;
+import quickfix.field.QuoteReqID;
+import quickfix.field.Text;
+import quickfix.field.ClOrdID;
 import quickfix.fix42.ExecutionReport;
 import quickfix.fix42.MessageCracker;
 import quickfix.fix42.NewOrderSingle;
+import quickfix.fix42.Quote;
 
 /**
  * Shared coordinator used by both acceptor and initiator QuickFIX/J Applications.
@@ -32,19 +38,28 @@ public class OrderReplicationCoordinator extends MessageCracker {
     private static final Logger log = LoggerFactory.getLogger(OrderReplicationCoordinator.class);
 
     private final FixClientProperties properties;
-    private final FixMessageProcessorFactory processorFactory;
     private final FixSessionRegistry sessionRegistry;
+    private final DropCopyReplicationService dropCopyReplicationService;
+    private final LocateResponseHandler locateResponseHandler;
+    private final ShortOrderProcessingService shortOrderProcessingService;
+    private final InitiatorLogonGuard initiatorLogonGuard;
     
     // Track recent messages from drop copy session (last 100 messages)
     private final java.util.concurrent.BlockingQueue<ReceivedMessage> recentDropCopyMessages = 
         new java.util.concurrent.LinkedBlockingQueue<>(100);
 
     public OrderReplicationCoordinator(FixClientProperties properties,
-                                       FixMessageProcessorFactory processorFactory,
-                                       FixSessionRegistry sessionRegistry) {
+                                       FixSessionRegistry sessionRegistry,
+                                       DropCopyReplicationService dropCopyReplicationService,
+                                       LocateResponseHandler locateResponseHandler,
+                                       ShortOrderProcessingService shortOrderProcessingService,
+                                       InitiatorLogonGuard initiatorLogonGuard) {
         this.properties = Objects.requireNonNull(properties, "properties must not be null");
-        this.processorFactory = Objects.requireNonNull(processorFactory, "processorFactory must not be null");
         this.sessionRegistry = Objects.requireNonNull(sessionRegistry, "sessionRegistry must not be null");
+        this.dropCopyReplicationService = Objects.requireNonNull(dropCopyReplicationService, "dropCopyReplicationService must not be null");
+        this.locateResponseHandler = Objects.requireNonNull(locateResponseHandler, "locateResponseHandler must not be null");
+        this.shortOrderProcessingService = Objects.requireNonNull(shortOrderProcessingService, "shortOrderProcessingService must not be null");
+        this.initiatorLogonGuard = Objects.requireNonNull(initiatorLogonGuard, "initiatorLogonGuard must not be null");
     }
 
     public void onCreate(SessionID sessionID, String connectionType) {
@@ -112,26 +127,23 @@ public class OrderReplicationCoordinator extends MessageCracker {
     }
 
     public void toAdmin(Message message, SessionID sessionID, String connectionType) {
-        java.util.List<FixMessageProcessor> processors = processorFactory.getProcessorsForSession(sessionID, connectionType);
-        
-        for (FixMessageProcessor processor : processors) {
-            boolean handles = processor.handlesSession(sessionID, connectionType);
-            
-            if (handles) {
-                try {
-                    processor.processOutgoingAdmin(message, sessionID);
-                    return;
-                } catch (quickfix.DoNotSend e) {
-                    // Re-throw DoNotSend wrapped in RuntimeException since Application.toAdmin doesn't declare it
-                    // QuickFIX/J framework will catch and handle it
-                    throw new RuntimeException("DoNotSend", e);
-                } catch (Exception e) {
-                    log.debug("Error in processor {} for session {}: {}", processor.getClass().getSimpleName(), sessionID, e.getMessage());
-                    return;
+        try {
+            String msgType = message.getHeader().getString(MsgType.FIELD);
+            if ("initiator".equalsIgnoreCase(connectionType) && "A".equals(msgType)) {
+                // Initiator Logon request: optionally suppress logon attempts and always request seq reset
+                if (!initiatorLogonGuard.isLogonAllowed(sessionID)) {
+                    log.info("Logon attempt suppressed for session {} until {}", sessionID, initiatorLogonGuard.getNextAllowedLogonFormatted());
+                    throw new RuntimeException("DoNotSend", new quickfix.DoNotSend());
+                }
+                if (!message.isSetField(quickfix.field.ResetSeqNumFlag.FIELD)) {
+                    message.setField(new quickfix.field.ResetSeqNumFlag(true));
                 }
             }
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            log.debug("Error processing toAdmin for session {}: {}", sessionID, e.getMessage());
         }
-        log.debug("No processor found for session {} (connection type: {}), using default handling", sessionID, connectionType);
     }
 
     public void fromAdmin(Message message, SessionID sessionID, String connectionType) {
@@ -208,41 +220,94 @@ public class OrderReplicationCoordinator extends MessageCracker {
             log.debug("Error checking sequence numbers in fromAdmin: {}", e.getMessage());
         }
         
-        // Delegate to the appropriate processor based on connection type
-        java.util.List<FixMessageProcessor> processors = processorFactory.getProcessorsForSession(sessionID, connectionType);
-        
-        for (FixMessageProcessor processor : processors) {
-            boolean handles = processor.handlesSession(sessionID, connectionType);
-            
-            if (handles) {
-                processor.processIncomingAdmin(message, sessionID);
-                return;
+        // Initiator-side admin handling: pause initiator on "not trade day"
+        try {
+            String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
+            if ("initiator".equalsIgnoreCase(connectionType) && "5".equals(msgType)) {
+                String text = message.isSetField(quickfix.field.Text.FIELD) ? message.getString(quickfix.field.Text.FIELD) : null;
+                if (text != null && text.toLowerCase().contains("not trade day")) {
+                    initiatorLogonGuard.markNotTradingDay(sessionID, text);
+                    // We avoid depending on FixSessionManager here to prevent Spring bean cycles.
+                    // Logon attempts will be suppressed in toAdmin() until the next trading window.
+                    initiatorLogonGuard.scheduleResume(() -> {});
+                }
             }
+        } catch (Exception e) {
+            log.debug("Error processing fromAdmin for session {}: {}", sessionID, e.getMessage());
         }
-        log.debug("No processor found for session {} (connection type: {}), using default handling", sessionID, connectionType);
     }
 
     public void fromApp(Message message, SessionID sessionID, String connectionType)
             throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
-        // Delegate to the appropriate processor based on connection type
-        java.util.List<FixMessageProcessor> processors = processorFactory.getProcessorsForSession(sessionID, connectionType);
-        
-        for (FixMessageProcessor processor : processors) {
-            boolean handles = processor.handlesSession(sessionID, connectionType);
-            
-            if (handles) {
-                processor.processIncomingApp(message, sessionID, sessionRegistry);
-                
-                // Track the message for drop copy session (for REST API)
-                if (isDropCopySession(sessionID)) {
-                    trackDropCopyMessage(sessionID, message);
-                }
-                break;
-            }
+        // Track the message for drop copy session (for REST API)
+        if (isDropCopySession(sessionID)) {
+            trackDropCopyMessage(sessionID, message);
         }
-        
-        // Always crack the message for business logic processing
+
+        // Crack the message for business logic processing
         crack(message, sessionID);
+    }
+
+    /**
+     * Drop-copy ExecutionReport handling: persist/replicate and drive short workflow.
+     * Initiator ExecutionReport handling: locate confirmation (OrdStatus=B).
+     */
+    @Override
+    public void onMessage(ExecutionReport report, SessionID sessionID)
+            throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
+        if (isDropCopySession(sessionID)) {
+            Optional<SessionID> initiatorSession = sessionRegistry.findAnyLoggedOnInitiator();
+            if (initiatorSession.isEmpty()) {
+                log.warn("No initiator session found to handle drop-copy ExecutionReport; session={}", sessionID);
+                return;
+            }
+            dropCopyReplicationService.processExecutionReport(report, sessionID, initiatorSession.get());
+            return;
+        }
+
+        // Non-drop-copy ExecutionReport: handle locate confirmation (OrdStatus=B) for quote locate accept
+        if (report.isSetField(OrdStatus.FIELD) && report.getOrdStatus().getValue() == 'B') {
+            String quoteReqId = null;
+            if (report.isSetField(QuoteReqID.FIELD)) {
+                quoteReqId = report.getString(QuoteReqID.FIELD);
+            } else if (report.isSetField(ClOrdID.FIELD)) {
+                quoteReqId = report.getString(ClOrdID.FIELD);
+            }
+            if (quoteReqId == null || quoteReqId.isBlank()) {
+                return;
+            }
+            String text = report.isSetField(Text.FIELD) ? report.getString(Text.FIELD) : null;
+            shortOrderProcessingService.processLocateConfirmationByQuoteReqId(quoteReqId, sessionID, text);
+        }
+    }
+
+    /**
+     * Locate quote response (MsgType=S) comes in as FIX42 Quote.
+     */
+    @Override
+    public void onMessage(Quote quote, SessionID sessionID)
+            throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
+        locateResponseHandler.processLocateResponse(quote, sessionID);
+    }
+
+    /**
+     * Fallback for message types we don't explicitly handle.
+     * Keeps QuickFIX/J from treating unknown application messages as errors.
+     */
+    @Override
+    public void onMessage(Message message, SessionID sessionID)
+            throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
+        // If it is MsgType=S but didn't parse as Quote for some reason, still handle it.
+        try {
+            String msgType = message.getHeader().getString(MsgType.FIELD);
+            if ("S".equals(msgType)) {
+                locateResponseHandler.processLocateResponse(message, sessionID);
+                return;
+            }
+        } catch (Exception ignored) {
+            // ignore
+        }
+        // no-op
     }
     
     /**
