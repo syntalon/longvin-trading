@@ -23,7 +23,9 @@ import org.springframework.stereotype.Component;
 import quickfix.ConfigError;
 import quickfix.DefaultMessageFactory;
 import quickfix.Dictionary;
+import quickfix.FileLogFactory;
 import quickfix.FileStoreFactory;
+import quickfix.LogFactory;
 import quickfix.MemoryStoreFactory;
 import quickfix.MessageFactory;
 import quickfix.MessageStoreFactory;
@@ -37,7 +39,8 @@ import quickfix.SocketInitiator;
 @Slf4j
 public class FixSessionManager implements SmartLifecycle {
 
-    private final OrderReplicationCoordinator application;
+    private final AcceptorFixApplication acceptorApplication;
+    private final InitiatorFixApplication initiatorApplication;
     private final FixClientProperties properties;
     private final ResourceLoader resourceLoader;
 
@@ -46,10 +49,12 @@ public class FixSessionManager implements SmartLifecycle {
     private SocketAcceptor acceptor;
     private final AtomicBoolean initiatorPaused = new AtomicBoolean(false);
 
-    public FixSessionManager(OrderReplicationCoordinator application,
+    public FixSessionManager(AcceptorFixApplication acceptorApplication,
+                             InitiatorFixApplication initiatorApplication,
                              FixClientProperties properties,
                              ResourceLoader resourceLoader) {
-        this.application = Objects.requireNonNull(application, "application must not be null");
+        this.acceptorApplication = Objects.requireNonNull(acceptorApplication, "acceptorApplication must not be null");
+        this.initiatorApplication = Objects.requireNonNull(initiatorApplication, "initiatorApplication must not be null");
         this.properties = Objects.requireNonNull(properties, "properties must not be null");
         this.resourceLoader = Objects.requireNonNull(resourceLoader, "resourceLoader must not be null");
     }
@@ -73,7 +78,8 @@ public class FixSessionManager implements SmartLifecycle {
                     // Use FileStoreFactory for acceptor sessions so sequence numbers persist
                     // This ensures our sender sequence numbers match what DAS Trader expects
                     MessageStoreFactory storeFactory = new FileStoreFactory(acceptorSettings);
-                    acceptor = new SocketAcceptor(application, storeFactory, acceptorSettings, null, messageFactory);
+                    LogFactory logFactory = new FileLogFactory(acceptorSettings);
+                    acceptor = new SocketAcceptor(acceptorApplication, storeFactory, acceptorSettings, logFactory, messageFactory);
                     acceptor.start();
                     startedSomething = true;
                     log.info("FIX acceptor started for drop-copy sessions (using FileStore for sequence number persistence): {}", describeSessions(acceptorSettings));
@@ -98,7 +104,8 @@ public class FixSessionManager implements SmartLifecycle {
                         log.debug("Could not log HeartBtInt settings: {}", e.getMessage());
                     }
                     MessageStoreFactory storeFactory = new MemoryStoreFactory();
-                    initiator = new SocketInitiator(application, storeFactory, initiatorSettings, null, messageFactory);
+                    LogFactory logFactory = new FileLogFactory(initiatorSettings);
+                    initiator = new SocketInitiator(initiatorApplication, storeFactory, initiatorSettings, logFactory, messageFactory);
                     initiator.start();
                     startedSomething = true;
                     log.info("FIX initiator started. Order-entry sessions: {}", describeSessions(initiatorSettings));

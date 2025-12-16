@@ -1,6 +1,8 @@
 package com.longvin.trading.processor.impl;
 
 import com.longvin.trading.config.FixClientProperties;
+import com.longvin.trading.fix.FixGatewayService;
+import com.longvin.trading.fix.FixSessionRegistry;
 import com.longvin.trading.processor.FixMessageProcessor;
 import com.longvin.trading.service.DropCopyReplicationService;
 import org.slf4j.Logger;
@@ -15,7 +17,6 @@ import quickfix.field.OrderID;
 import quickfix.field.Symbol;
 import quickfix.fix42.ExecutionReport;
 
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -33,11 +34,14 @@ public class AcceptorMessageProcessor implements FixMessageProcessor {
     
     private final DropCopyReplicationService replicationService;
     private final FixClientProperties properties;
+    private final FixGatewayService fixGateway;
     
     public AcceptorMessageProcessor(DropCopyReplicationService replicationService,
-                                    FixClientProperties properties) {
+                                    FixClientProperties properties,
+                                    FixGatewayService fixGateway) {
         this.replicationService = Objects.requireNonNull(replicationService, "replicationService must not be null");
         this.properties = Objects.requireNonNull(properties, "properties must not be null");
+        this.fixGateway = Objects.requireNonNull(fixGateway, "fixGateway must not be null");
     }
     
     @Override
@@ -149,16 +153,15 @@ public class AcceptorMessageProcessor implements FixMessageProcessor {
     }
     
     @Override
-    public void processIncomingApp(Message message, SessionID sessionID, Map<String, SessionID> shadowSessions)
+    public void processIncomingApp(Message message, SessionID sessionID, FixSessionRegistry sessionRegistry)
             throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
         try {
             String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
             String msgTypeName = getMsgTypeName(msgType);
             int msgSeqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
-            log.info("shadowSessions={}", shadowSessions);
             // Log all messages from drop copy session
-            log.info("📥 Received {} from DAS Trader drop copy session {} - MsgSeqNum: {}", 
-                msgTypeName, sessionID, msgSeqNum);
+            log.info("📥 Received {} from DAS Trader drop copy session {} - MsgSeqNum: {} - Message: {}",
+                msgTypeName, sessionID, msgSeqNum, message);
             
             // Handle ExecutionReport: delegate replication to service
             if ("8".equals(msgType)) { // ExecutionReport
@@ -176,7 +179,7 @@ public class AcceptorMessageProcessor implements FixMessageProcessor {
                             execType, execId, orderId, symbol);
                     }
                     
-                    Optional<SessionID> initiatorSession = findInitiatorSession(sessionID, shadowSessions);
+                    Optional<SessionID> initiatorSession = findInitiatorSession(sessionRegistry);
                     if (initiatorSession.isPresent()) {
                         replicationService.processExecutionReport(report, sessionID, initiatorSession.get());
                     } else {
@@ -196,8 +199,8 @@ public class AcceptorMessageProcessor implements FixMessageProcessor {
         // Logging for outgoing application messages (if any) can be added here when needed
     }
     
-    private Optional<SessionID> findInitiatorSession(SessionID dropCopySessionID, Map<String, SessionID> shadowSessions) {
-        return Optional.ofNullable(shadowSessions.get(properties.getPrimarySession()));
+    private Optional<SessionID> findInitiatorSession(FixSessionRegistry sessionRegistry) {
+        return sessionRegistry.findAnyLoggedOnInitiator();
     }
     
     private String getMsgTypeName(String msgType) {

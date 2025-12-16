@@ -239,8 +239,8 @@ public class ShortOrderProcessingService {
 
         // Determine if full or partial approval
         boolean isFullApproval = offerSize.compareTo(locateRequest.getQuantity()) >= 0;
-        BigDecimal approvedQty = offerSize.compareTo(locateRequest.getQuantity()) > 0 
-            ? locateRequest.getQuantity() 
+        BigDecimal approvedQty = offerSize.compareTo(locateRequest.getQuantity()) > 0
+            ? locateRequest.getQuantity()
             : offerSize;
 
         try {
@@ -253,8 +253,9 @@ public class ShortOrderProcessingService {
             locateRequest.setApprovedQty(approvedQty);
             locateRequestRepository.save(locateRequest);
 
-            // Notify success and trigger shadow order placement
-            notifyLocateSuccess(locateRequest, approvedQty, offerPx, responseMessage, initiatorSessionID);
+            // OfferSize is sufficient for at least some qty; per workflow we must send Locate Accept (p)
+            // and wait for a later ExecutionReport (OrdStatus=B) before placing shadow short orders.
+            sendLocateAccept(locateRequest, approvedQty, initiatorSessionID);
         } catch (Exception e) {
             log.error("Error processing locate response for QuoteReqID={}", locateRequest.getFixQuoteReqId(), e);
             // Update status to indicate error
@@ -262,6 +263,52 @@ public class ShortOrderProcessingService {
             locateRequest.setResponseMessage("Error processing locate response: " + e.getMessage());
             locateRequestRepository.save(locateRequest);
             shortLocateCoordinator.completeExceptionally(resolvePrimaryOrderId(locateRequest), e);
+        }
+    }
+
+    @Transactional
+    public void processLocateConfirmationByQuoteReqId(String fixQuoteReqId,
+                                                     SessionID initiatorSessionID,
+                                                     String confirmationMessage) {
+        LocateRequest locateRequest = locateRequestRepository.findByFixQuoteReqId(fixQuoteReqId)
+                .orElseThrow(() -> new IllegalArgumentException("LocateRequest not found: " + fixQuoteReqId));
+
+        BigDecimal approvedQty = locateRequest.getApprovedQty();
+        if (approvedQty == null || approvedQty.compareTo(BigDecimal.ZERO) <= 0) {
+            log.warn("Locate confirmation received for QuoteReqID={} but approvedQty is missing/zero", fixQuoteReqId);
+            notifyLocateFailure(locateRequest, "Locate confirmed but approved quantity is missing");
+            return;
+        }
+
+        log.info("Locate confirmed (OrdStatus=B) for QuoteReqID={}, approvedQty={}", fixQuoteReqId, approvedQty);
+        notifyLocateSuccess(locateRequest, approvedQty, locateRequest.getOfferPx(), confirmationMessage, initiatorSessionID);
+    }
+
+    private void sendLocateAccept(LocateRequest locateRequest, BigDecimal approvedQty, SessionID initiatorSessionID) {
+        try {
+            Session session = Session.lookupSession(initiatorSessionID);
+            if (session == null || !session.isLoggedOn()) {
+                log.error("Cannot send locate accept: session {} is not logged on", initiatorSessionID);
+                notifyLocateFailure(locateRequest, "Cannot send locate accept: initiator session not logged on");
+                return;
+            }
+
+            Message acceptMsg = new Message();
+            acceptMsg.getHeader().setString(MsgType.FIELD, "p");
+
+            if (locateRequest.getFixQuoteReqId() != null) {
+                acceptMsg.setString(quickfix.field.QuoteReqID.FIELD, locateRequest.getFixQuoteReqId());
+            }
+            acceptMsg.setString(Symbol.FIELD, locateRequest.getSymbol());
+            acceptMsg.setDouble(OrderQty.FIELD, approvedQty.doubleValue());
+            acceptMsg.setString(quickfix.field.Account.FIELD, locateRequest.getAccount().getAccountNumber());
+
+            session.send(acceptMsg);
+            log.info("Sent Locate Accept (MsgType=p): QuoteReqID={}, Symbol={}, Qty={}",
+                    locateRequest.getFixQuoteReqId(), locateRequest.getSymbol(), approvedQty);
+        } catch (Exception e) {
+            log.error("Error sending locate accept for QuoteReqID={}: {}", locateRequest.getFixQuoteReqId(), e.getMessage(), e);
+            notifyLocateFailure(locateRequest, "Error sending locate accept: " + e.getMessage());
         }
     }
     

@@ -143,28 +143,6 @@ spring:
   config:
     activate:
       on-profile: simulator
-  datasource:
-    url: jdbc:h2:mem:tradingdb-test
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
-  jpa:
-    database-platform: org.hibernate.dialect.H2Dialect
-    hibernate:
-      ddl-auto: validate  # Use Flyway for migrations
-    show-sql: false
-    properties:
-      hibernate:
-        format_sql: true
-  flyway:
-    enabled: true
-    locations: classpath:db/migration
-    baseline-on-migrate: true
-
 trading:
   initiator:
     non-trading-resume-hour: 6
@@ -173,8 +151,10 @@ trading:
     # Override config to use test configuration pointing to simulator
     config-path: classpath:fix/das-mirror-trading-simulator.cfg
     primary-session: OPAL
-    drop-copy-session-sender-comp-id: OS111
-    drop-copy-session-target-comp-id: DAST
+    # Must match the backend drop-copy acceptor session in das-mirror-trading-simulator.cfg:
+    # SenderCompID=SIM-OS111, TargetCompID=SIM-DAST
+    drop-copy-session-sender-comp-id: SIM-OS111
+    drop-copy-session-target-comp-id: SIM-DAST
     primary-account: PRIMARY_ACCOUNT
     shadow-sessions: SHADOW1,SHADOW2
     shadow-accounts:
@@ -198,28 +178,6 @@ spring:
   config:
     activate:
       on-profile: dev
-  datasource:
-    url: jdbc:h2:mem:tradingdb-dev
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
-  jpa:
-    database-platform: org.hibernate.dialect.H2Dialect
-    hibernate:
-      ddl-auto: validate  # Use Flyway for migrations
-    show-sql: false
-    properties:
-      hibernate:
-        format_sql: true
-  flyway:
-    enabled: true
-    locations: classpath:db/migration
-    baseline-on-migrate: true
-
 trading:
   fix:
     # Dev FIX config pointing to DAS Trader dev environment

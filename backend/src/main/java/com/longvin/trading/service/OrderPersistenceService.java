@@ -262,6 +262,11 @@ public class OrderPersistenceService {
                         LocalDateTime transactTime = transactDate.toInstant()
                             .atZone(ZoneOffset.UTC).toLocalDateTime();
                         builder.transactTime(transactTime);
+                    } else if (value instanceof java.time.LocalDateTime ldt) {
+                        // Some QuickFIX/J builds expose UTC timestamp fields as LocalDateTime
+                        builder.transactTime(ldt);
+                    } else if (value instanceof java.time.Instant instant) {
+                        builder.transactTime(LocalDateTime.ofInstant(instant, ZoneOffset.UTC));
                     } else if (value != null) {
                         log.debug("Unexpected TransactTime type: {}", value.getClass().getName());
                     }

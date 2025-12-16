@@ -79,7 +79,8 @@ public class SimulatorSessionManager implements CommandLineRunner {
         }
 
         MessageStoreFactory storeFactory = new FileStoreFactory(acceptorSettings);
-        acceptor = new SocketAcceptor(application, storeFactory, acceptorSettings, null, messageFactory);
+        LogFactory logFactory = new FileLogFactory(acceptorSettings);
+        acceptor = new SocketAcceptor(application, storeFactory, acceptorSettings, logFactory, messageFactory);
         acceptor.start();
         log.info("FIX Simulator acceptor started: {}", describeSessions(acceptorSettings));
     }
@@ -92,7 +93,8 @@ public class SimulatorSessionManager implements CommandLineRunner {
         }
 
         MessageStoreFactory storeFactory = new FileStoreFactory(initiatorSettings);
-        initiator = new SocketInitiator(application, storeFactory, initiatorSettings, null, messageFactory);
+        LogFactory logFactory = new FileLogFactory(initiatorSettings);
+        initiator = new SocketInitiator(application, storeFactory, initiatorSettings, logFactory, messageFactory);
         initiator.start();
         log.info("FIX Simulator initiator started: {}", describeSessions(initiatorSettings));
     }

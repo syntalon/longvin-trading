@@ -2,7 +2,9 @@ package com.longvin.trading.processor.impl;
 
 import com.longvin.trading.fix.FixSessionManager;
 import com.longvin.trading.fix.InitiatorLogonGuard;
+import com.longvin.trading.fix.FixSessionRegistry;
 import com.longvin.trading.processor.FixMessageProcessor;
+import com.longvin.trading.service.ShortOrderProcessingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import quickfix.DoNotSend;
@@ -11,8 +13,12 @@ import quickfix.IncorrectTagValue;
 import quickfix.Message;
 import quickfix.SessionID;
 import quickfix.UnsupportedMessageType;
-
-import java.util.Map;
+import quickfix.field.ClOrdID;
+import quickfix.field.MsgType;
+import quickfix.field.OrdStatus;
+import quickfix.field.Text;
+import quickfix.field.QuoteReqID;
+import quickfix.fix42.ExecutionReport;
 
 /**
  * Message processor for the order-entry initiator session.
@@ -30,13 +36,16 @@ public class InitiatorMessageProcessor implements FixMessageProcessor {
     private final InitiatorLogonGuard logonGuard;
     private final FixSessionManager sessionManager;
     private final LocateResponseHandler locateResponseHandler;
+    private final ShortOrderProcessingService shortOrderProcessingService;
     
     public InitiatorMessageProcessor(InitiatorLogonGuard logonGuard, 
                                      FixSessionManager sessionManager,
-                                     LocateResponseHandler locateResponseHandler) {
+                                     LocateResponseHandler locateResponseHandler,
+                                     ShortOrderProcessingService shortOrderProcessingService) {
         this.logonGuard = logonGuard;
         this.sessionManager = sessionManager;
         this.locateResponseHandler = locateResponseHandler;
+        this.shortOrderProcessingService = shortOrderProcessingService;
     }
     
     @Override
@@ -134,19 +143,53 @@ public class InitiatorMessageProcessor implements FixMessageProcessor {
     }
     
     @Override
-    public void processIncomingApp(Message message, SessionID sessionID, Map<String, SessionID> shadowSessions) 
+    public void processIncomingApp(Message message, SessionID sessionID, FixSessionRegistry sessionRegistry) 
             throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
         try {
-            String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
+            String msgType = message.getHeader().getString(MsgType.FIELD);
             
             // Handle Short Locate Quote Response (MsgType="S")
             if ("S".equals(msgType)) {
                 log.debug("Received Short Locate Quote Response on initiator session {}", sessionID);
                 locateResponseHandler.processLocateResponse(message, sessionID);
+            } else if ("8".equals(msgType)) {
+                handleExecutionReportForLocateConfirmation(message, sessionID);
             }
             // Other application messages can be handled here if needed
         } catch (Exception e) {
             log.debug("Error processing application message from initiator session {}: {}", sessionID, e.getMessage());
+        }
+    }
+
+    private void handleExecutionReportForLocateConfirmation(Message message, SessionID sessionID) {
+        try {
+            if (!(message instanceof ExecutionReport report)) {
+                return;
+            }
+            if (!report.isSetField(OrdStatus.FIELD)) {
+                return;
+            }
+            char ordStatus = report.getOrdStatus().getValue();
+            if (ordStatus != 'B') {
+                return;
+            }
+
+            String quoteReqId = null;
+            if (report.isSetField(QuoteReqID.FIELD)) {
+                quoteReqId = report.getString(QuoteReqID.FIELD);
+            } else if (report.isSetField(ClOrdID.FIELD)) {
+                quoteReqId = report.getString(ClOrdID.FIELD);
+            }
+
+            if (quoteReqId == null || quoteReqId.isBlank()) {
+                log.debug("Locate confirmation (OrdStatus=B) received but QuoteReqID/ClOrdID missing; session={} message={}", sessionID, report);
+                return;
+            }
+
+            String text = report.isSetField(Text.FIELD) ? report.getString(Text.FIELD) : null;
+            shortOrderProcessingService.processLocateConfirmationByQuoteReqId(quoteReqId, sessionID, text);
+        } catch (Exception e) {
+            log.debug("Error handling locate confirmation ExecutionReport on initiator session {}: {}", sessionID, e.getMessage());
         }
     }
 }

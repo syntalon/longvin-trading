@@ -147,6 +147,32 @@ public class SimulatorApplication implements Application {
                 } catch (Exception e) {
                     log.error("Error parsing LocateRequest: {}", e.getMessage(), e);
                 }
+            } else if ("R".equals(msgType)) {
+                // Short Locate Quote Request (DAS): MsgType=R, respond with MsgType=S
+                try {
+                    String quoteReqId = message.isSetField(QuoteReqID.FIELD) ? message.getString(QuoteReqID.FIELD)
+                            : (message.isSetField(ClOrdID.FIELD) ? message.getString(ClOrdID.FIELD) : "N/A");
+                    String symbol = message.isSetField(Symbol.FIELD) ? message.getString(Symbol.FIELD) : "N/A";
+                    double qty = message.isSetField(OrderQty.FIELD) ? message.getDouble(OrderQty.FIELD) : 0.0;
+                    log.info("Simulator received Short Locate Quote Request (MsgType=R) (session: {}): seqNum={}, QuoteReqID={}, Symbol={}, Qty={}",
+                            sessionID, seqNum, quoteReqId, symbol, qty);
+                    locateResponseService.sendShortLocateQuoteResponse(sessionID, message);
+                } catch (Exception e) {
+                    log.error("Error processing Short Locate Quote Request (MsgType=R)", e);
+                }
+            } else if ("p".equals(msgType)) {
+                // Locate Accept (DAS): MsgType=p, respond with ExecutionReport OrdStatus=B
+                try {
+                    String quoteReqId = message.isSetField(QuoteReqID.FIELD) ? message.getString(QuoteReqID.FIELD)
+                            : (message.isSetField(ClOrdID.FIELD) ? message.getString(ClOrdID.FIELD) : "N/A");
+                    String symbol = message.isSetField(Symbol.FIELD) ? message.getString(Symbol.FIELD) : "N/A";
+                    double qty = message.isSetField(OrderQty.FIELD) ? message.getDouble(OrderQty.FIELD) : 0.0;
+                    log.info("Simulator received Locate Accept (MsgType=p) (session: {}): seqNum={}, QuoteReqID={}, Symbol={}, Qty={}",
+                            sessionID, seqNum, quoteReqId, symbol, qty);
+                    locateResponseService.sendLocateAcceptConfirmation(sessionID, message);
+                } catch (Exception e) {
+                    log.error("Error processing Locate Accept (MsgType=p)", e);
+                }
             } else if ("F".equals(msgType)) {
                 // OrderCancelRequest
                 try {

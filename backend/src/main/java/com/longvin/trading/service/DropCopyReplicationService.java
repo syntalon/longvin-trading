@@ -70,7 +70,8 @@ public class DropCopyReplicationService {
             throws FieldNotFound {
         
         // Check if this is from the drop copy session
-        if (!sessionID.getSenderCompID().equalsIgnoreCase(properties.getPrimarySession())) {
+        if (!sessionID.getSenderCompID().equalsIgnoreCase(properties.getDropCopySessionSenderCompId())
+                || !sessionID.getTargetCompID().equalsIgnoreCase(properties.getDropCopySessionTargetCompId())) {
             log.trace("Ignoring execution report from non drop-copy session {}", sessionID);
             return;
         }
@@ -138,8 +139,8 @@ public class DropCopyReplicationService {
             
             // Step 1: Create draft orders for shadow accounts immediately
             createDraftOrdersForShortOrder(orderId);
-            
-            // Step 2: Send locate request to check stock availability
+            // Always go through locate workflow for short orders
+            log.info("Short order locate workflow enabled for all symbols. Continuing locate workflow for orderId={}", orderId);
             processShortOrderWithLocate(state, account, orderId, initiatorSessionID);
         } else {
             // Regular order - replicate directly to shadows

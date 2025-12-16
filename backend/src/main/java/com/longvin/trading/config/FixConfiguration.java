@@ -7,7 +7,7 @@ import org.springframework.context.annotation.Configuration;
 import javax.xml.parsers.DocumentBuilderFactory;
 
 @Configuration
-@EnableConfigurationProperties(FixClientProperties.class)
+@EnableConfigurationProperties({FixClientProperties.class})
 public class FixConfiguration {
     @Bean
     public DocumentBuilderFactory documentBuilderFactory() {

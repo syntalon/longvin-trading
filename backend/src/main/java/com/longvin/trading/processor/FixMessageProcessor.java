@@ -7,7 +7,7 @@ import quickfix.Message;
 import quickfix.SessionID;
 import quickfix.UnsupportedMessageType;
 
-import java.util.Map;
+import com.longvin.trading.fix.FixSessionRegistry;
 
 /**
  * Interface for processing FIX messages for a specific session type.
@@ -34,12 +34,12 @@ public interface FixMessageProcessor {
      * This is called before the message is cracked/dispatched.
      * @param message The message received
      * @param sessionID The session ID
-     * @param shadowSessions Map of shadow session IDs by sender comp ID (for replication)
+     * @param sessionRegistry Session registry for looking up other sessions (for replication)
      * @throws FieldNotFound if a required field is missing
      * @throws UnsupportedMessageType if the message type is not supported
      * @throws IncorrectTagValue if a field value is incorrect
      */
-    default void processIncomingApp(Message message, SessionID sessionID, Map<String, SessionID> shadowSessions)
+    default void processIncomingApp(Message message, SessionID sessionID, FixSessionRegistry sessionRegistry)
             throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
         // Default: no-op, processors can override if needed
     }

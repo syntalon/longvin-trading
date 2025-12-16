@@ -3,25 +3,20 @@ package com.longvin.trading.fix;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 
 import com.longvin.trading.config.FixClientProperties;
 import com.longvin.trading.processor.FixMessageProcessor;
 import com.longvin.trading.processor.FixMessageProcessorFactory;
-import com.longvin.trading.service.OrderReplicationService;
+import com.longvin.trading.fix.FixSessionRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import quickfix.Application;
-import quickfix.Dictionary;
-import quickfix.FieldConvertError;
 import quickfix.FieldNotFound;
 import quickfix.IncorrectTagValue;
 import quickfix.Message;
 import quickfix.Session;
 import quickfix.SessionID;
-import quickfix.SessionSettings;
 import quickfix.UnsupportedMessageType;
 import quickfix.field.Account;
 import quickfix.fix42.ExecutionReport;
@@ -29,45 +24,31 @@ import quickfix.fix42.MessageCracker;
 import quickfix.fix42.NewOrderSingle;
 
 /**
- * The main QuickFIX/J Application implementation handling both initiator and acceptor sessions.
+ * Shared coordinator used by both acceptor and initiator QuickFIX/J Applications.
  */
 @Component
-public class OrderReplicationCoordinator extends MessageCracker implements Application {
+public class OrderReplicationCoordinator extends MessageCracker {
 
     private static final Logger log = LoggerFactory.getLogger(OrderReplicationCoordinator.class);
 
     private final FixClientProperties properties;
-    private final Map<String, SessionID> initiatorSessionMap = new ConcurrentHashMap<>();
-    private final Map<SessionID, String> sessionConnectionTypes = new ConcurrentHashMap<>(); // SessionID -> "acceptor" or "initiator"
-    private final OrderReplicationService orderReplicationService;
     private final FixMessageProcessorFactory processorFactory;
-    private volatile SessionSettings cachedSessionSettings; // Cache to avoid reloading
+    private final FixSessionRegistry sessionRegistry;
     
     // Track recent messages from drop copy session (last 100 messages)
     private final java.util.concurrent.BlockingQueue<ReceivedMessage> recentDropCopyMessages = 
         new java.util.concurrent.LinkedBlockingQueue<>(100);
 
-    public OrderReplicationCoordinator(FixClientProperties properties, 
-                                      OrderReplicationService orderReplicationService,
-                                      FixMessageProcessorFactory processorFactory) {
+    public OrderReplicationCoordinator(FixClientProperties properties,
+                                       FixMessageProcessorFactory processorFactory,
+                                       FixSessionRegistry sessionRegistry) {
         this.properties = Objects.requireNonNull(properties, "properties must not be null");
-        this.orderReplicationService = Objects.requireNonNull(orderReplicationService, "orderMirroringService must not be null");
         this.processorFactory = Objects.requireNonNull(processorFactory, "processorFactory must not be null");
+        this.sessionRegistry = Objects.requireNonNull(sessionRegistry, "sessionRegistry must not be null");
     }
 
-    @Override
-    public void onCreate(SessionID sessionID) {
-        // Determine and store connection type for this session
-        String connectionType = determineConnectionType(sessionID);
-        if (connectionType != null) {
-            sessionConnectionTypes.put(sessionID, connectionType);
-            log.info("Created FIX session {} (connection type: {})", sessionID, connectionType);
-            if("initiator".equalsIgnoreCase(connectionType))
-                initiatorSessionMap.put(sessionID.getTargetCompID(), sessionID);{
-            }
-        } else {
-            log.info("Created FIX session {} (connection type: unknown)", sessionID);
-        }
+    public void onCreate(SessionID sessionID, String connectionType) {
+        log.info("Created FIX session {} (connection type: {})", sessionID, connectionType);
         
         // For drop copy acceptor sessions, set target sequence number to 1 initially
         // This allows QuickFIX/J to accept any incoming sequence number >= 1 from DAS Trader
@@ -90,8 +71,7 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
         }
     }
 
-    @Override
-    public void onLogon(SessionID sessionID) {
+    public void onLogon(SessionID sessionID, String connectionType) {
         log.info("Logged on to FIX session {}", sessionID);
         // For drop copy acceptor sessions, synchronize sequence numbers after logon
         // This ensures we're in sync with DAS Trader's sequence numbers
@@ -108,9 +88,7 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
         }
     }
 
-    @Override
-    public void onLogout(SessionID sessionID) {
-        initiatorSessionMap.remove(sessionID.getTargetCompID());
+    public void onLogout(SessionID sessionID, String connectionType) {
         try {
             Session session = Session.lookupSession(sessionID);
             if (session != null) {
@@ -133,17 +111,11 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
         log.warn("Logged out from FIX session {} - this may indicate a connection issue or server-side timeout", sessionID);
     }
 
-    @Override
-    public void toAdmin(Message message, SessionID sessionID) {
-        String connectionType = sessionConnectionTypes.get(sessionID);
-        java.util.List<FixMessageProcessor> processors = connectionType != null
-            ? processorFactory.getProcessorsForSession(sessionID, connectionType)
-            : processorFactory.getProcessorsForSession(sessionID);
+    public void toAdmin(Message message, SessionID sessionID, String connectionType) {
+        java.util.List<FixMessageProcessor> processors = processorFactory.getProcessorsForSession(sessionID, connectionType);
         
         for (FixMessageProcessor processor : processors) {
-            boolean handles = connectionType != null
-                ? processor.handlesSession(sessionID, connectionType)
-                : processor.handlesSession(sessionID);
+            boolean handles = processor.handlesSession(sessionID, connectionType);
             
             if (handles) {
                 try {
@@ -162,8 +134,7 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
         log.debug("No processor found for session {} (connection type: {}), using default handling", sessionID, connectionType);
     }
 
-    @Override
-    public void fromAdmin(Message message, SessionID sessionID) {
+    public void fromAdmin(Message message, SessionID sessionID, String connectionType) {
         // Handle sequence number synchronization for drop copy acceptor sessions
         // IMPORTANT: QuickFIX/J validates sequence numbers BEFORE calling fromAdmin
         // If validation fails, we won't get here. To handle sequence number gaps,
@@ -238,15 +209,10 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
         }
         
         // Delegate to the appropriate processor based on connection type
-        String connectionType = sessionConnectionTypes.get(sessionID);
-        java.util.List<FixMessageProcessor> processors = connectionType != null
-            ? processorFactory.getProcessorsForSession(sessionID, connectionType)
-            : processorFactory.getProcessorsForSession(sessionID);
+        java.util.List<FixMessageProcessor> processors = processorFactory.getProcessorsForSession(sessionID, connectionType);
         
         for (FixMessageProcessor processor : processors) {
-            boolean handles = connectionType != null
-                ? processor.handlesSession(sessionID, connectionType)
-                : processor.handlesSession(sessionID);
+            boolean handles = processor.handlesSession(sessionID, connectionType);
             
             if (handles) {
                 processor.processIncomingAdmin(message, sessionID);
@@ -256,26 +222,16 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
         log.debug("No processor found for session {} (connection type: {}), using default handling", sessionID, connectionType);
     }
 
-    @Override
-    public void toApp(Message message, SessionID sessionID) {
-        // no-op
-    }
-
-    @Override
-    public void fromApp(Message message, SessionID sessionID) throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
+    public void fromApp(Message message, SessionID sessionID, String connectionType)
+            throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
         // Delegate to the appropriate processor based on connection type
-        String connectionType = sessionConnectionTypes.get(sessionID);
-        java.util.List<FixMessageProcessor> processors = connectionType != null
-            ? processorFactory.getProcessorsForSession(sessionID, connectionType)
-            : processorFactory.getProcessorsForSession(sessionID);
+        java.util.List<FixMessageProcessor> processors = processorFactory.getProcessorsForSession(sessionID, connectionType);
         
         for (FixMessageProcessor processor : processors) {
-            boolean handles = connectionType != null
-                ? processor.handlesSession(sessionID, connectionType)
-                : processor.handlesSession(sessionID);
+            boolean handles = processor.handlesSession(sessionID, connectionType);
             
             if (handles) {
-                processor.processIncomingApp(message, sessionID, initiatorSessionMap);
+                processor.processIncomingApp(message, sessionID, sessionRegistry);
                 
                 // Track the message for drop copy session (for REST API)
                 if (isDropCopySession(sessionID)) {
@@ -320,85 +276,6 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
         }
     }
     
-    /**
-     * Determine the connection type (acceptor or initiator) for a given session.
-     * This is done by loading the SessionSettings and checking the ConnectionType property.
-     */
-    private String determineConnectionType(SessionID sessionID) {
-        try {
-            SessionSettings settings = getSessionSettings();
-            if (settings != null) {
-                // Try exact match first
-                Dictionary sessionDict = settings.get(sessionID);
-                if (sessionDict != null) {
-                    try {
-                        String connType = sessionDict.getString("ConnectionType");
-                        log.debug("Found connection type for session {}: {}", sessionID, connType);
-                        return connType;
-                    } catch (FieldConvertError e) {
-                        log.debug("Could not read ConnectionType for session {}: {}", sessionID, e.getMessage());
-                    }
-                } else {
-                    // If exact match fails, try iterating through all sessions to find a match
-                    // This handles cases where SessionQualifier might differ
-                    java.util.Iterator<SessionID> iterator = settings.sectionIterator();
-                    while (iterator.hasNext()) {
-                        SessionID configSessionID = iterator.next();
-                        // Match by BeginString, SenderCompID, and TargetCompID (ignore SessionQualifier)
-                        if (configSessionID.getBeginString().equals(sessionID.getBeginString())
-                            && configSessionID.getSenderCompID().equals(sessionID.getSenderCompID())
-                            && configSessionID.getTargetCompID().equals(sessionID.getTargetCompID())) {
-                            Dictionary configDict = settings.get(configSessionID);
-                            if (configDict != null) {
-                                try {
-                                    String connType = configDict.getString("ConnectionType");
-                                    log.debug("Found connection type for session {} (matched by CompIDs): {}", sessionID, connType);
-                                    return connType;
-                                } catch (FieldConvertError e) {
-                                    log.debug("Could not read ConnectionType for matched session {}: {}", configSessionID, e.getMessage());
-                                }
-                            }
-                        }
-                    }
-                    log.debug("No matching session found in config for session {}", sessionID);
-                }
-            } else {
-                log.debug("SessionSettings not available for session {}", sessionID);
-            }
-        } catch (Exception e) {
-            log.debug("Could not determine connection type for session {}: {}", sessionID, e.getMessage());
-        }
-        return null;
-    }
-    
-    /**
-     * Get SessionSettings, loading from config if not already cached.
-     */
-    private SessionSettings getSessionSettings() {
-        if (cachedSessionSettings == null) {
-            synchronized (this) {
-                if (cachedSessionSettings == null) {
-                    try {
-                        // Load settings from the config path
-                        String configPath = properties.getConfigPath();
-                        if (configPath.startsWith("classpath:")) {
-                            String resourcePath = configPath.substring("classpath:".length());
-                            java.io.InputStream configStream = getClass().getClassLoader()
-                                .getResourceAsStream(resourcePath);
-                            if (configStream != null) {
-                                cachedSessionSettings = new SessionSettings(configStream);
-                                configStream.close();
-                            }
-                        }
-                    } catch (Exception e) {
-                        log.debug("Could not load SessionSettings: {}", e.getMessage());
-                    }
-                }
-            }
-        }
-        return cachedSessionSettings;
-    }
-    
     private String getMsgTypeName(String msgType) {
         return switch (msgType) {
             case "0" -> "Heartbeat";
@@ -422,14 +299,6 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
      */
     public java.util.List<ReceivedMessage> getRecentDropCopyMessages() {
         return new java.util.ArrayList<>(recentDropCopyMessages);
-    }
-
-    @Override
-    public void onMessage(ExecutionReport report, SessionID sessionID) throws FieldNotFound {
-        // Drop copy ExecutionReports are now handled by AcceptorMessageProcessor via DropCopyReplicationService
-        // This method is kept for any other ExecutionReport handling that might be needed
-        // (e.g., from initiator sessions for order status updates)
-        log.trace("Received ExecutionReport on session {}: {}", sessionID, report);
     }
 
     public NewOrderSingle cloneOrder(NewOrderSingle order) throws CloneNotSupportedException {
@@ -466,7 +335,7 @@ public class OrderReplicationCoordinator extends MessageCracker implements Appli
      * @return Optional containing the SessionID if found and logged on, empty otherwise
      */
     public Optional<SessionID> getSessionIdForSenderCompId(String senderCompId) {
-        return Optional.ofNullable(initiatorSessionMap.get(senderCompId));
+        return sessionRegistry.findLoggedOnInitiatorByAlias(senderCompId);
     }
 
 
