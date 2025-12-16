@@ -99,7 +99,7 @@ public class RejectedOrderHandler implements ExecutionReportHandler {
             orderParams.put("side", context.getSide());
             orderParams.put("orderQty", context.getOrderQty());
             orderParams.put("ordType", '2'); // LIMIT
-            orderParams.put("price", context.getAvgPx()); // 使用上次的价格
+            orderParams.put("price", context.getAvgPx());
             orderParams.put("timeInForce", '0'); // DAY
             orderParams.put("account", context.getAccount());
             orderParams.put("exDestination", alternativeRoute);
