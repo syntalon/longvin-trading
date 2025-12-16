@@ -7,9 +7,7 @@ import quickfix.field.*;
 import java.time.LocalDateTime;
 import java.util.Date;
 
-/**
- * Execution Report 上下文信息
- */
+
 @Data
 public class ExecutionReportContext {
     private String clOrdID;
@@ -28,7 +26,7 @@ public class ExecutionReportContext {
     private String account;
     private String exDestination; // 路由信息
 
-    // 业务辅助字段
+
     private boolean isShortOrder;
     private boolean isLocateRelated;
 

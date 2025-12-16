@@ -17,19 +17,17 @@ public class FillOrderHandler implements ExecutionReportHandler {
 
     @Override
     public void handle(ExecutionReportContext context, SessionID sessionID) {
-        if (context.getExecType() == '2') { // 完全成交
+        if (context.getExecType() == '2') {
             log.info("Order completely filled. ClOrdID: {}, AvgPx: {}",
                     context.getClOrdID(), context.getAvgPx());
             //updateLocalOrderStatus(context.getClOrdID(), "FILLED");
-        } else { // 部分成交
+        } else {
             log.info("Order partially filled. ClOrdID: {}, CumQty: {}/{}, LastPx: {}",
                     context.getClOrdID(),
                     context.getCumQty(), context.getOrderQty(),
                     context.getAvgPx());
             //updateLocalOrderStatus(context.getClOrdID(), "PARTIALLY_FILLED");
         }
-
-        // 记录成交信息
         recordFillInformation(context);
     }
 
@@ -40,6 +38,6 @@ public class FillOrderHandler implements ExecutionReportHandler {
         fillRecord.setFillQuantity(context.getCumQty() - (context.getCumQty() - context.getLeavesQty()));
         fillRecord.setFillPrice(context.getAvgPx());
         fillRecord.setTimestamp(new Date());*/
-        // 保存成交记录
+
     }
 }

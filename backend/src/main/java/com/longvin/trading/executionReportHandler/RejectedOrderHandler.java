@@ -35,19 +35,16 @@ public class RejectedOrderHandler implements ExecutionReportHandler {
         log.warn("Order rejected. ClOrdID: {}, Reason: {}",
                 context.getClOrdID(), context.getText());
 
-        // 检查是否是券源问题
         if (isLocateIssue(context.getText())) {
             if (context.isShortOrder()) {
-                // 发送Short Locate Quote Request请求券源
+
                 requestShortLocate(context, sessionID);
             } else {
                 log.warn("Non-short order rejected due to locate issue: {}", context.getText());
             }
         } else if (isRouteIssue(context.getText())) {
-            // 尝试使用备用路由重新下单
             retryWithAlternativeRoute(context, sessionID);
         } else {
-            // 其他拒绝类型，记录日志
             //updateLocalOrderStatus(context.getClOrdID(), "REJECTED");
             log.error("Order permanently rejected: {}", context.getText());
         }
@@ -94,7 +91,6 @@ public class RejectedOrderHandler implements ExecutionReportHandler {
     private void retryWithAlternativeRoute(ExecutionReportContext context, SessionID sessionID) {
         String alternativeRoute = locateRouteService.getAlternativeRoute(context.getExDestination());
         if (alternativeRoute != null) {
-            // 生成新的ClOrdID
             String newClOrdID = context.getClOrdID() + "_R" + System.currentTimeMillis();
 
             Map<String, Object> orderParams = new HashMap<>();

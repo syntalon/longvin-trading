@@ -30,7 +30,7 @@ public class ExecutionReportProcessor {
                     log.debug("Using handler: {} for ClOrdID: {}",
                             handler.getClass().getSimpleName(), context.getClOrdID());
 
-                    // 异步处理以避免阻塞FIX线程
+
                     CompletableFuture.runAsync(() -> {
                         try {
                             handler.handle(context, sessionID);
@@ -39,7 +39,7 @@ public class ExecutionReportProcessor {
                         }
                     });
 
-                    break; // 找到匹配的处理器后退出循环
+                    break;
                 }
             }
 

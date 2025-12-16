@@ -26,7 +26,7 @@ public class LocateOfferHandler implements ExecutionReportHandler {
 
     @Override
     public boolean supports(ExecutionReportContext context) {
-        return context.getOrdStatus() == 'B' && context.isShortOrder(); // DAS特有状态
+        return context.getOrdStatus() == 'B' && context.isShortOrder();
     }
 
     @Override
@@ -34,22 +34,17 @@ public class LocateOfferHandler implements ExecutionReportHandler {
         log.info("Received locate offer. OrderID: {}, ClOrdID: {}",
                 context.getOrderID(), context.getClOrdID());
 
-        // 决定是否接受locate报价
         boolean shouldAccept = locateDecisionService.shouldAcceptLocateOffer(context);
 
         if (shouldAccept) {
-            // 接受报价
             fixMessageSender.sendShortLocateAcceptOffer(sessionID, context.getOrderID());
             log.info("Accepted locate offer for OrderID: {}", context.getOrderID());
 
-            // 更新本地状态
             //updateLocalOrderStatus(context.getClOrdID(), "LOCATE_ACCEPTED");
         } else {
-            // 拒绝报价
             //fixMessageSender.sendShortLocateRejectOffer(sessionID, context.getOrderID());
             log.info("Rejected locate offer for OrderID: {}", context.getOrderID());
 
-            // 可能需要请求新的locate报价
             requestNewLocateQuote(context, sessionID);
         }
     }
