@@ -1,0 +1,314 @@
+package com.longvin.trading.fix;
+
+import com.longvin.trading.executionReportHandler.ExecutionReportProcessor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+import quickfix.*;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+
+/**
+ * QuickFIX/J Application for drop-copy acceptor session (OS111->DAST).
+ * Handles incoming messages from DAS Trader, including ExecutionReports, heartbeats, and logon/logout.
+ */
+@Component
+public class DropCopyApplication extends MessageCracker implements Application {
+
+    private static final Logger log = LoggerFactory.getLogger(DropCopyApplication.class);
+    
+    private final FixSessionRegistry sessionRegistry;
+    private final ExecutionReportProcessor executionReportProcessor;
+    
+    // Track recent messages from drop copy session (last 100 messages)
+    private final BlockingQueue<ReceivedMessage> recentDropCopyMessages = 
+        new LinkedBlockingQueue<>(100);
+
+    public DropCopyApplication(FixSessionRegistry sessionRegistry,
+                               ExecutionReportProcessor executionReportProcessor) {
+        this.sessionRegistry = sessionRegistry;
+        this.executionReportProcessor = executionReportProcessor;
+    }
+
+    @Override
+    public void onCreate(SessionID sessionID) {
+        log.info("Created drop-copy acceptor session {}", sessionID);
+        
+        // Set target sequence number to 1 initially to accept any incoming sequence number >= 1 from DAS Trader
+        // The actual value will be synchronized in fromAdmin when Logon is received
+        // Sender sequence number is managed by FileStore (persists across restarts)
+        try {
+            Session session = Session.lookupSession(sessionID);
+            if (session != null) {
+                session.setNextTargetMsgSeqNum(1);
+                log.info("Drop copy acceptor session created {} - set targetSeqNum=1 initially to accept any incoming sequence number. " +
+                    "Will synchronize to actual value in fromAdmin. Sender sequence number managed by FileStore.", sessionID);
+            }
+        } catch (Exception e) {
+            log.debug("Could not set target sequence number for drop copy acceptor session {}: {}", sessionID, e.getMessage());
+        }
+    }
+
+    @Override
+    public void onLogon(SessionID sessionID) {
+        sessionRegistry.register("acceptor", sessionID);
+        log.info("Logged on to drop-copy session {}", sessionID);
+        
+        // Log sequence number after logon
+        try {
+            Session session = Session.lookupSession(sessionID);
+            if (session != null) {
+                int expectedSeqNum = session.getExpectedTargetNum();
+                log.info("Drop copy session logged on - current expected sequence number: {}", expectedSeqNum);
+            }
+        } catch (Exception e) {
+            log.debug("Could not check sequence number after logon for drop copy session {}: {}", sessionID, e.getMessage());
+        }
+    }
+
+    @Override
+    public void onLogout(SessionID sessionID) {
+        sessionRegistry.unregister("acceptor", sessionID);
+        try {
+            Session session = Session.lookupSession(sessionID);
+            if (session != null) {
+                int targetSeqNum = session.getExpectedTargetNum();
+                log.warn("Logged out from drop-copy session {} - Session state: isLoggedOn={}, isEnabled={}, expectedTargetSeqNum={}", 
+                    sessionID, session.isLoggedOn(), session.isEnabled(), targetSeqNum);
+                log.warn("Drop copy session logout - DAS Trader may have rejected our Logon response or closed the connection. " +
+                    "Check if DAS Trader sent a Logout message (should appear in logs above). " +
+                    "If no Logout message is visible, DAS Trader may have closed the connection without sending one.");
+            } else {
+                log.warn("Logged out from drop-copy session {} - Session object not found", sessionID);
+            }
+        } catch (Exception e) {
+            log.warn("Logged out from drop-copy session {} - Error getting session details: {}", sessionID, e.getMessage());
+        }
+    }
+
+    @Override
+    public void toAdmin(Message message, SessionID sessionID) {
+        // No-op for drop-copy acceptor (we only receive admin messages)
+    }
+
+    @Override
+    public void fromAdmin(Message message, SessionID sessionID) throws FieldNotFound, IncorrectTagValue, RejectLogon {
+        // Handle sequence number synchronization for drop copy acceptor sessions
+        try {
+            String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
+            
+            if ("A".equals(msgType)) {
+                // Logon message: synchronize both target and sender sequence numbers
+                int incomingSeqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
+                try {
+                    Session session = Session.lookupSession(sessionID);
+                    if (session != null) {
+                        int expectedSeqNum = session.getExpectedTargetNum();
+                        // Always synchronize to DAS Trader's sequence number for Logon messages
+                        if (incomingSeqNum != expectedSeqNum) {
+                            log.info("Synchronizing target sequence numbers: incoming={}, expected={}. Setting expected sequence number to match DAS Trader.", 
+                                incomingSeqNum, expectedSeqNum);
+                            session.setNextTargetMsgSeqNum(incomingSeqNum);
+                        }
+                        
+                        // Synchronize our sender sequence number to match DAS Trader's sender sequence number
+                        log.info("Setting our sender sequence number to match DAS Trader's sender sequence number: {}. " +
+                            "This will be used in the Logon response and persisted in FileStore.", incomingSeqNum);
+                        session.setNextSenderMsgSeqNum(incomingSeqNum);
+                    }
+                } catch (Exception e) {
+                    log.debug("Could not adjust sequence numbers for drop copy acceptor session: {}", e.getMessage());
+                }
+            } else if ("5".equals(msgType)) {
+                // Logout message: check if DAS Trader is telling us what sequence number they expect
+                try {
+                    String text = message.isSetField(quickfix.field.Text.FIELD) 
+                        ? message.getString(quickfix.field.Text.FIELD) 
+                        : null;
+                    if (text != null && text.toLowerCase().contains("seq")) {
+                        log.warn("Received Logout from DAS Trader with text that might contain sequence number info: {}", text);
+                        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("(?:seq|sequence).*?(\\d+)", java.util.regex.Pattern.CASE_INSENSITIVE);
+                        java.util.regex.Matcher matcher = pattern.matcher(text);
+                        if (matcher.find()) {
+                            try {
+                                int expectedSeqNum = Integer.parseInt(matcher.group(1));
+                                Session session = Session.lookupSession(sessionID);
+                                if (session != null) {
+                                    log.info("Extracted expected sender sequence number from Logout message: {}. Setting our sender sequence number to match.", expectedSeqNum);
+                                    session.setNextSenderMsgSeqNum(expectedSeqNum);
+                                }
+                            } catch (NumberFormatException e) {
+                                log.debug("Could not parse sequence number from Logout text: {}", text);
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    log.debug("Could not process Logout message for sequence number info: {}", e.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Error processing fromAdmin for drop-copy session {}: {}", sessionID, e.getMessage());
+        }
+    }
+
+    @Override
+    public void toApp(Message message, SessionID sessionID) throws DoNotSend {
+        // No-op for drop-copy acceptor (we only receive messages)
+    }
+
+    @Override
+    public void fromApp(Message message, SessionID sessionID)
+            throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
+        // Track the message for REST API
+        trackDropCopyMessage(sessionID, message);
+        
+        // Log all incoming messages from DAS Trader at INFO level
+        logIncomingDASMessage(message, sessionID);
+
+        // Crack the message for business logic processing
+        crack(message, sessionID);
+    }
+
+    @Override
+    public void onMessage(Message message, SessionID sessionID)
+            throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
+        String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
+
+        // Log incoming heartbeats at INFO level
+        if ("0".equals(msgType)) {
+            try {
+                int seqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
+                String senderCompId = message.getHeader().getString(quickfix.field.SenderCompID.FIELD);
+                String targetCompId = message.getHeader().getString(quickfix.field.TargetCompID.FIELD);
+                log.info("Received heartbeat from DAS Trader ({} -> {}, seqNum={})", senderCompId, targetCompId, seqNum);
+            } catch (Exception e) {
+                log.trace("Could not log incoming heartbeat: {}", e.getMessage());
+            }
+            // Heartbeats are handled automatically by QuickFIX/J
+            return;
+        }
+
+        // Handle ExecutionReports
+        if (quickfix.field.MsgType.EXECUTION_REPORT.equals(msgType)) {
+            executionReportProcessor.process(message, sessionID);
+        } else {
+            // Other message types
+            crack(message, sessionID);
+        }
+    }
+
+    private void trackDropCopyMessage(SessionID sessionID, Message message) {
+        try {
+            String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
+            String msgTypeName = getMsgTypeName(msgType);
+            ReceivedMessage receivedMsg = new ReceivedMessage(
+                sessionID.toString(),
+                msgType,
+                msgTypeName,
+                message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD),
+                java.time.Instant.now()
+            );
+            // Add to queue, removing oldest if full
+            if (!recentDropCopyMessages.offer(receivedMsg)) {
+                recentDropCopyMessages.poll(); // Remove oldest
+                recentDropCopyMessages.offer(receivedMsg); // Add new one
+            }
+        } catch (Exception e) {
+            log.debug("Could not track message: {}", e.getMessage());
+        }
+    }
+    
+    /**
+     * Log all incoming messages from DAS Trader at INFO level for visibility.
+     */
+    private void logIncomingDASMessage(Message message, SessionID sessionID) {
+        try {
+            String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
+            String msgTypeName = getMsgTypeName(msgType);
+            int seqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
+            String senderCompId = message.getHeader().getString(quickfix.field.SenderCompID.FIELD);
+            String targetCompId = message.getHeader().getString(quickfix.field.TargetCompID.FIELD);
+            
+            // Build detailed log message based on message type
+            String details = "";
+            try {
+                if ("A".equals(msgType)) { // Logon
+                    details = " - DAS Trader connected";
+                } else if ("8".equals(msgType)) { // ExecutionReport
+                    if (message.isSetField(quickfix.field.ClOrdID.FIELD)) {
+                        String clOrdId = message.getString(quickfix.field.ClOrdID.FIELD);
+                        String ordStatus = message.isSetField(quickfix.field.OrdStatus.FIELD) 
+                            ? String.valueOf(message.getChar(quickfix.field.OrdStatus.FIELD)) 
+                            : "?";
+                        details = String.format(" - ClOrdID=%s, OrdStatus=%s", clOrdId, ordStatus);
+                    }
+                } else if ("5".equals(msgType)) { // Logout
+                    if (message.isSetField(quickfix.field.Text.FIELD)) {
+                        details = " - " + message.getString(quickfix.field.Text.FIELD);
+                    }
+                }
+            } catch (Exception e) {
+                // Ignore errors extracting details, just log basic info
+            }
+            
+            log.info("DAS Trader -> {}: {} (seqNum={}, {} -> {}){}", 
+                targetCompId, msgTypeName, seqNum, senderCompId, targetCompId, details);
+        } catch (Exception e) {
+            log.warn("Could not log incoming DAS message: {}", e.getMessage());
+        }
+    }
+    
+    private String getMsgTypeName(String msgType) {
+        return switch (msgType) {
+            case "0" -> "Heartbeat";
+            case "1" -> "TestRequest";
+            case "2" -> "ResendRequest";
+            case "3" -> "Reject";
+            case "4" -> "SequenceReset";
+            case "5" -> "Logout";
+            case "A" -> "Logon";
+            case "D" -> "NewOrderSingle";
+            case "8" -> "ExecutionReport";
+            case "F" -> "OrderCancelRequest";
+            case "G" -> "OrderCancelReplaceRequest";
+            default -> "Unknown(" + msgType + ")";
+        };
+    }
+    
+    /**
+     * Get recent messages received from the drop copy session.
+     * @return List of recent messages (up to 100)
+     */
+    public List<ReceivedMessage> getRecentDropCopyMessages() {
+        return new ArrayList<>(recentDropCopyMessages);
+    }
+
+    /**
+     * Represents a message received from the drop copy session.
+     */
+    public static final class ReceivedMessage {
+        private final String sessionId;
+        private final String msgType;
+        private final String msgTypeName;
+        private final int msgSeqNum;
+        private final java.time.Instant timestamp;
+        
+        public ReceivedMessage(String sessionId, String msgType, String msgTypeName, int msgSeqNum, java.time.Instant timestamp) {
+            this.sessionId = sessionId;
+            this.msgType = msgType;
+            this.msgTypeName = msgTypeName;
+            this.msgSeqNum = msgSeqNum;
+            this.timestamp = timestamp;
+        }
+        
+        public String getSessionId() { return sessionId; }
+        public String getMsgType() { return msgType; }
+        public String getMsgTypeName() { return msgTypeName; }
+        public int getMsgSeqNum() { return msgSeqNum; }
+        public java.time.Instant getTimestamp() { return timestamp; }
+    }
+}
+

@@ -41,6 +41,14 @@ public class FixClientProperties {
     private final String clOrdIdPrefix;
     @Getter
     private final Map<String, ShadowAccountPolicy> shadowAccountPolicies;
+    /**
+     * Optional initiator logon credentials (sent on MsgType=A as tags 553/554 if configured).
+     * Keep empty in source; set via environment variables in production.
+     */
+    @Getter
+    private final String logonUsername;
+    @Getter
+    private final String logonPassword;
 
     public FixClientProperties(
             @DefaultValue("false") boolean enabled,
@@ -52,7 +60,9 @@ public class FixClientProperties {
             List<String> shadowSessions,
             Map<String, String> shadowAccounts,
             Map<String, ShadowAccountPolicy> shadowAccountPolicies,
-            @DefaultValue("MIRROR-") String clOrdIdPrefix) {
+            @DefaultValue("MIRROR-") String clOrdIdPrefix,
+            @DefaultValue("") String logonUsername,
+            @DefaultValue("") String logonPassword) {
 
         this.enabled = enabled;
         this.configPath = Objects.requireNonNull(configPath, "configPath must not be null");
@@ -69,6 +79,8 @@ public class FixClientProperties {
         this.shadowAccountPolicies = Collections.unmodifiableMap(
                 shadowAccountPolicies == null ? Map.of() : shadowAccountPolicies);
         this.clOrdIdPrefix = Objects.requireNonNull(clOrdIdPrefix, "clOrdIdPrefix must not be null");
+        this.logonUsername = logonUsername == null ? "" : logonUsername;
+        this.logonPassword = logonPassword == null ? "" : logonPassword;
     }
 
     public Optional<String> getPrimaryAccount() {

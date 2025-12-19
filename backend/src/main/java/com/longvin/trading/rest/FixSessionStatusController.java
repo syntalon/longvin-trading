@@ -1,6 +1,6 @@
 package com.longvin.trading.rest;
 
-import com.longvin.trading.fix.OrderReplicationCoordinator;
+import com.longvin.trading.fix.DropCopyApplication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -16,10 +16,10 @@ import java.util.stream.Collectors;
 @RequestMapping("/api/fix/sessions")
 public class FixSessionStatusController {
 
-    private final OrderReplicationCoordinator coordinator;
+    private final DropCopyApplication dropCopyApplication;
 
-    public FixSessionStatusController(OrderReplicationCoordinator coordinator) {
-        this.coordinator = coordinator;
+    public FixSessionStatusController(DropCopyApplication dropCopyApplication) {
+        this.dropCopyApplication = dropCopyApplication;
     }
 
     @GetMapping("/drop-copy")
@@ -75,7 +75,7 @@ public class FixSessionStatusController {
     public Map<String, Object> getDropCopyMessages() {
         Map<String, Object> result = new HashMap<>();
         
-        List<OrderReplicationCoordinator.ReceivedMessage> messages = coordinator.getRecentDropCopyMessages();
+        List<DropCopyApplication.ReceivedMessage> messages = dropCopyApplication.getRecentDropCopyMessages();
         
         result.put("totalMessages", messages.size());
         result.put("messages", messages.stream().map(msg -> Map.of(
@@ -89,7 +89,7 @@ public class FixSessionStatusController {
         if (messages.isEmpty()) {
             result.put("message", "No messages received from drop copy session yet. Waiting for DAS Trader to send messages.");
         } else {
-            OrderReplicationCoordinator.ReceivedMessage lastMessage = messages.get(messages.size() - 1);
+            DropCopyApplication.ReceivedMessage lastMessage = messages.get(messages.size() - 1);
             result.put("lastMessage", Map.of(
                 "msgTypeName", lastMessage.getMsgTypeName(),
                 "msgSeqNum", lastMessage.getMsgSeqNum(),

@@ -59,6 +59,9 @@ trading:
   fix:
     enabled: ${FIX_ENABLED:true}
     config-path: ${FIX_CONFIG_PATH:classpath:fix/das-mirror-trading.cfg}
+    # Optional FIX Logon credentials (tags 553/554). Prefer env vars; do NOT hardcode secrets.
+    logon-username: ${FIX_LOGON_USERNAME:}
+    logon-password: ${FIX_LOGON_PASSWORD:}
     primary-session: ${FIX_PRIMARY_SESSION:OS111}
     drop-copy-session-sender-comp-id: ${FIX_DROP_COPY_SENDER_COMP_ID:OS111}
     drop-copy-session-target-comp-id: ${FIX_DROP_COPY_TARGET_COMP_ID:DAST}

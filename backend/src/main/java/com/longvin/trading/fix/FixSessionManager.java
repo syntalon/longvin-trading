@@ -39,8 +39,8 @@ import quickfix.SocketInitiator;
 @Slf4j
 public class FixSessionManager implements SmartLifecycle {
 
-    private final AcceptorFixApplication acceptorApplication;
-    private final InitiatorFixApplication initiatorApplication;
+    private final DropCopyApplication dropCopyApplication;
+    private final OrderEntryApplication orderEntryApplication;
     private final FixClientProperties properties;
     private final ResourceLoader resourceLoader;
 
@@ -49,12 +49,12 @@ public class FixSessionManager implements SmartLifecycle {
     private SocketAcceptor acceptor;
     private final AtomicBoolean initiatorPaused = new AtomicBoolean(false);
 
-    public FixSessionManager(AcceptorFixApplication acceptorApplication,
-                             InitiatorFixApplication initiatorApplication,
+    public FixSessionManager(DropCopyApplication dropCopyApplication,
+                             OrderEntryApplication orderEntryApplication,
                              FixClientProperties properties,
                              ResourceLoader resourceLoader) {
-        this.acceptorApplication = Objects.requireNonNull(acceptorApplication, "acceptorApplication must not be null");
-        this.initiatorApplication = Objects.requireNonNull(initiatorApplication, "initiatorApplication must not be null");
+        this.dropCopyApplication = Objects.requireNonNull(dropCopyApplication, "dropCopyApplication must not be null");
+        this.orderEntryApplication = Objects.requireNonNull(orderEntryApplication, "orderEntryApplication must not be null");
         this.properties = Objects.requireNonNull(properties, "properties must not be null");
         this.resourceLoader = Objects.requireNonNull(resourceLoader, "resourceLoader must not be null");
     }
@@ -79,7 +79,7 @@ public class FixSessionManager implements SmartLifecycle {
                     // This ensures our sender sequence numbers match what DAS Trader expects
                     MessageStoreFactory storeFactory = new FileStoreFactory(acceptorSettings);
                     LogFactory logFactory = new FileLogFactory(acceptorSettings);
-                    acceptor = new SocketAcceptor(acceptorApplication, storeFactory, acceptorSettings, logFactory, messageFactory);
+                    acceptor = new SocketAcceptor(dropCopyApplication, storeFactory, acceptorSettings, logFactory, messageFactory);
                     acceptor.start();
                     startedSomething = true;
                     log.info("FIX acceptor started for drop-copy sessions (using FileStore for sequence number persistence): {}", describeSessions(acceptorSettings));
@@ -105,7 +105,7 @@ public class FixSessionManager implements SmartLifecycle {
                     }
                     MessageStoreFactory storeFactory = new MemoryStoreFactory();
                     LogFactory logFactory = new FileLogFactory(initiatorSettings);
-                    initiator = new SocketInitiator(initiatorApplication, storeFactory, initiatorSettings, logFactory, messageFactory);
+                    initiator = new SocketInitiator(orderEntryApplication, storeFactory, initiatorSettings, logFactory, messageFactory);
                     initiator.start();
                     startedSomething = true;
                     log.info("FIX initiator started. Order-entry sessions: {}", describeSessions(initiatorSettings));

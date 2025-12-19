@@ -1,7 +1,7 @@
 package com.longvin.trading.service.order;
 
 import com.longvin.trading.config.FixClientProperties;
-import com.longvin.trading.fix.OrderReplicationCoordinator;
+import com.longvin.trading.fix.FixApplicationUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -21,12 +21,12 @@ public class OrderEntryService {
     private static final Logger log = LoggerFactory.getLogger(OrderEntryService.class);
 
     private final FixClientProperties properties;
-    private final OrderReplicationCoordinator app;
+    private final FixApplicationUtils utils;
 
     public OrderEntryService(FixClientProperties properties,
-                             OrderReplicationCoordinator app) {
+                             FixApplicationUtils utils) {
         this.properties = properties;
-        this.app = app;
+        this.utils = utils;
     }
 
     public NewOrderSingleResponse submitNewOrder(NewOrderSingleRequest request) {
@@ -57,7 +57,7 @@ public class OrderEntryService {
         }
 
         String senderCompId = request.getSenderCompId();
-        quickfix.SessionID sessionID = app.getSessionIdForSenderCompId(senderCompId).orElse(null);
+        quickfix.SessionID sessionID = utils.getSessionIdForSenderCompId(senderCompId).orElse(null);
         if (sessionID == null) {
             String msg = "No logged-on FIX session for senderCompId=" + senderCompId;
             log.warn(msg);
@@ -123,7 +123,7 @@ public class OrderEntryService {
             order.set(new Account(req.getAccount()));
         } else {
             // Let existing logic override account if configured
-            app.overrideAccountIfNeeded(order, req.getSenderCompId());
+            utils.overrideAccountIfNeeded(order, req.getSenderCompId());
         }
 
         return order;
