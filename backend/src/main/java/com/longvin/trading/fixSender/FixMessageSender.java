@@ -58,6 +58,25 @@ public class FixMessageSender {
             log.error("Failed to send Short Locate Accept", e);
         }
     }
+    
+    public void sendShortLocateRejectOffer(SessionID sessionID, String orderID) {
+        Message rejectMsg = new Message();
+        quickfix.Message.Header header = rejectMsg.getHeader();
+
+        header.setString(MsgType.FIELD, "p"); // Short Locate Accept/Reject offer
+        header.setString(SenderCompID.FIELD, sessionID.getSenderCompID());
+        header.setString(TargetCompID.FIELD, sessionID.getTargetCompID());
+        //header.setUtcTimeStamp(SendingTime.FIELD, new Date());
+
+        String quoteID = orderID + ",0"; // 1=accept, 0=reject
+        rejectMsg.setString(QuoteID.FIELD, quoteID);
+
+        try {
+            Session.sendToTarget(rejectMsg, sessionID);
+        } catch (SessionNotFound e) {
+            log.error("Failed to send Short Locate Reject", e);
+        }
+    }
 
     public void sendNewOrderSingle(SessionID sessionID, Map<String, Object> params) {
         Message newOrder = new Message();

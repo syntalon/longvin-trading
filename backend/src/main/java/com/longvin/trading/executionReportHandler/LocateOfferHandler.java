@@ -42,7 +42,7 @@ public class LocateOfferHandler implements ExecutionReportHandler {
 
             //updateLocalOrderStatus(context.getClOrdID(), "LOCATE_ACCEPTED");
         } else {
-            //fixMessageSender.sendShortLocateRejectOffer(sessionID, context.getOrderID());
+            fixMessageSender.sendShortLocateRejectOffer(sessionID, context.getOrderID());
             log.info("Rejected locate offer for OrderID: {}", context.getOrderID());
 
             requestNewLocateQuote(context, sessionID);
