@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration scanPeriod="60 seconds">
-
+    <!-- Define LOG_DIR property from environment variable or system property -->
+    <!-- Logback can access both env vars and system properties -->
+    <property name="LOG_DIR" value="${LOG_DIR:-logs}"/>
+    
 
     <!-- Console appender for all environments -->
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
@@ -10,17 +13,16 @@
     </appender>
 
     <appender name="logFile" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <!-- Use environment variable LOG_DIR or default to ./logs relative to working directory -->
+        <!-- Use LOG_DIR property defined above -->
         <!-- For Azure VM, set LOG_DIR=/var/log/longvin-trading or similar absolute path -->
-        <file>${LOG_DIR:-logs}/chiaManager.log</file>
+        <file>${LOG_DIR}/longvinTrading.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>${LOG_DIR:-logs}/longvinTrading-%d{yyyy-MM-dd}.log</fileNamePattern>
+            <fileNamePattern>${LOG_DIR}/longvinTrading-%d{yyyy-MM-dd}.log</fileNamePattern>
             <maxHistory>60</maxHistory>
         </rollingPolicy>
         <encoder>
             <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36}:%L - %msg%n</pattern>
         </encoder>
-        <!-- Create directory if it doesn't exist -->
         <prudent>false</prudent>
     </appender>
 
@@ -38,5 +40,6 @@
 
     <root level="ERROR">
         <appender-ref ref="STDOUT"/>
+        <appender-ref ref="logFile"/>
     </root>
 </configuration>
