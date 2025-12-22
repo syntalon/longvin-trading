@@ -1,9 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<configuration scanPeriod="60 seconds">
+<configuration scanPeriod="60 seconds" debug="false">
+    <!-- Enable status listener to capture logback internal errors -->
+    <!-- This will output logback errors to console when file logging fails -->
+    <statusListener class="ch.qos.logback.core.status.OnConsoleStatusListener"/>
+    
     <!-- Define LOG_DIR property from environment variable or system property -->
     <!-- Logback can access both env vars and system properties -->
     <property name="LOG_DIR" value="${LOG_DIR:-logs}"/>
     
+    <!-- Log logback configuration status (helps debug issues) -->
+    <property name="LOG_DIR_RESOLVED" value="${LOG_DIR}"/>
 
     <!-- Console appender for all environments -->
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
@@ -12,6 +18,7 @@
         </encoder>
     </appender>
 
+    <!-- File appender with error handling -->
     <appender name="logFile" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <!-- Use LOG_DIR property defined above -->
         <!-- For Azure VM, set LOG_DIR=/var/log/longvin-trading or similar absolute path -->
@@ -24,8 +31,9 @@
             <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36}:%L - %msg%n</pattern>
         </encoder>
         <prudent>false</prudent>
+        <!-- Stop application if file appender fails to start (fail fast) -->
+        <stopOnError>false</stopOnError>
     </appender>
-
 
     <!-- Hibernate SQL loggers - set to WARN to suppress SQL statements -->
     <logger name="org.hibernate.SQL" level="WARN"/>
