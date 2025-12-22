@@ -360,5 +360,15 @@ public class OrderPersistenceService {
     public Optional<Order> getOrderByFixOrderId(String fixOrderId) {
         return orderRepository.findByFixOrderId(fixOrderId);
     }
+
+    /**
+     * Find order by FIX ClOrdID.
+     */
+    public Optional<Order> findOrderByClOrdId(String clOrdId) {
+        if (clOrdId == null || clOrdId.isBlank()) {
+            return Optional.empty();
+        }
+        return orderRepository.findByFixClOrdId(clOrdId);
+    }
 }
 

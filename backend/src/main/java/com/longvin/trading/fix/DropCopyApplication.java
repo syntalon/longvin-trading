@@ -193,6 +193,7 @@ public class DropCopyApplication extends MessageCracker implements Application {
 
         // Handle ExecutionReports
         if (quickfix.field.MsgType.EXECUTION_REPORT.equals(msgType)) {
+            log.info("Received ExecutionReport from DAS Trader: {}", message);
             executionReportProcessor.process(message, sessionID);
         } else {
             // Other message types

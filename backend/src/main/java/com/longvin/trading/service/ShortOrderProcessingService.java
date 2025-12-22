@@ -97,28 +97,20 @@ public class ShortOrderProcessingService {
      * 
      * @param locateRequest The locate request to send
      * @param initiatorSessionID The session to send on
-     * @param retryCount Current retry attempt (0 = first attempt)
-     * @return true if sent successfully, false otherwise
      */
     @Transactional
-    private boolean sendLocateRequest(LocateRequest locateRequest, SessionID initiatorSessionID, int retryCount) {
+    @SuppressWarnings("resource")
+    private void sendLocateRequest(LocateRequest locateRequest, SessionID initiatorSessionID) {
         try {
             Session session = Session.lookupSession(initiatorSessionID);
             if (session == null || !session.isLoggedOn()) {
-                log.error("Cannot send locate request: session {} is not logged on (retry {})",
-                    initiatorSessionID, retryCount);
+                log.error("Cannot send locate request: session {} is not logged on", initiatorSessionID);
 
-                if (retryCount < 3) {
-                    log.info("Will retry locate request in 5 seconds (attempt {})", retryCount + 1);
-                    // Schedule retry (in a real implementation, use a scheduler)
-                    return false;
-                } else {
-                    locateRequest.setStatus(LocateRequest.LocateStatus.REJECTED);
-                    locateRequest.setResponseMessage("Session not logged on after " + (retryCount + 1) + " attempts");
-                    locateRequestRepository.save(locateRequest);
-                    notifyLocateFailure(locateRequest, "Session not logged on");
-                    return false;
-                }
+                locateRequest.setStatus(LocateRequest.LocateStatus.REJECTED);
+                locateRequest.setResponseMessage("Session not logged on");
+                locateRequestRepository.save(locateRequest);
+                notifyLocateFailure(locateRequest, "Session not logged on");
+                return;
             }
 
             // Create Short Locate Quote Request (MsgType=R) per DAS spec
@@ -135,9 +127,7 @@ public class ShortOrderProcessingService {
                 locateMsg.setString(quickfix.field.QuoteReqID.FIELD, locateRequest.getFixQuoteReqId());
             } else {
                 // Fallback: use ClOrdID if QuoteReqID not set
-                locateMsg.setString(ClOrdID.FIELD, locateRequest.getFixQuoteReqId() != null 
-                    ? locateRequest.getFixQuoteReqId() 
-                    : "LOC-" + System.currentTimeMillis());
+                locateMsg.setString(ClOrdID.FIELD, "LOC-" + System.currentTimeMillis());
             }
             
             locateMsg.setString(Symbol.FIELD, locateRequest.getSymbol());
@@ -150,34 +140,19 @@ public class ShortOrderProcessingService {
             }
 
             session.send(locateMsg);
-            log.info("Sent Short Locate Quote Request (MsgType=R): QuoteReqID={}, Symbol={}, Qty={}, Route={}, Retry={}", 
-                locateRequest.getFixQuoteReqId(), locateRequest.getSymbol(), locateRequest.getQuantity(), 
-                locateRequest.getLocateRoute(), retryCount);
-            
-            return true;
+            log.info("Sent Short Locate Quote Request (MsgType=R): QuoteReqID={}, Symbol={}, Qty={}, Route={},ShortLocateQuoteRequest={}",
+                locateRequest.getFixQuoteReqId(), locateRequest.getSymbol(), locateRequest.getQuantity(),
+                locateRequest.getLocateRoute(),locateMsg);
 
         } catch (Exception e) {
-            log.error("Error sending locate request for order {} (retry {}): {}",
-                locateRequest.getOrder().getId(), retryCount, e.getMessage(), e);
+            log.error("Error sending locate request for order {}: {}",
+                locateRequest.getOrder().getId(), e.getMessage(), e);
 
-            if (retryCount < 3) {
-                log.info("Will retry locate request in 5 seconds (attempt {})", retryCount + 1);
-                return false; // Will retry
-            } else {
-                locateRequest.setStatus(LocateRequest.LocateStatus.REJECTED);
-                locateRequest.setResponseMessage("Error sending locate request after " + (retryCount + 1) + " attempts: " + e.getMessage());
-                locateRequestRepository.save(locateRequest);
-                notifyLocateFailure(locateRequest, "Error sending locate request: " + e.getMessage());
-                return false;
-            }
+            locateRequest.setStatus(LocateRequest.LocateStatus.REJECTED);
+            locateRequest.setResponseMessage("Error sending locate request: " + e.getMessage());
+            locateRequestRepository.save(locateRequest);
+            notifyLocateFailure(locateRequest, "Error sending locate request: " + e.getMessage());
         }
-    }
-    
-    /**
-     * Send locate request (first attempt).
-     */
-    private void sendLocateRequest(LocateRequest locateRequest, SessionID initiatorSessionID) {
-        sendLocateRequest(locateRequest, initiatorSessionID, 0);
     }
 
     /**
@@ -186,8 +161,8 @@ public class ShortOrderProcessingService {
      * 
      * @param locateRequestId The locate request ID that was responded to
      * @param approved Whether locate was approved
-     * @param availableQty Quantity available for borrowing
-     * @param locateId Locate ID from broker
+     * @param offerPx Offer price per share
+     * @param offerSize Quantity available for borrowing
      * @param responseMessage Response message
      * @param initiatorSessionID Session to send orders
      */
@@ -227,7 +202,7 @@ public class ShortOrderProcessingService {
             locateRequest.setResponseMessage(responseMessage);
         }
 
-        if (!approved || offerSize == null || offerSize.compareTo(BigDecimal.ZERO) <= 0) {
+        if (offerSize == null || offerSize.compareTo(BigDecimal.ZERO) <= 0) {
             // Locate rejected: OfferSize <= 0
             locateRequest.setStatus(LocateRequest.LocateStatus.REJECTED);
             locateRequest.setApprovedQty(BigDecimal.ZERO);
@@ -284,6 +259,7 @@ public class ShortOrderProcessingService {
         notifyLocateSuccess(locateRequest, approvedQty, locateRequest.getOfferPx(), confirmationMessage, initiatorSessionID);
     }
 
+    @SuppressWarnings("resource")
     private void sendLocateAccept(LocateRequest locateRequest, BigDecimal approvedQty, SessionID initiatorSessionID) {
         try {
             Session session = Session.lookupSession(initiatorSessionID);
@@ -293,22 +269,46 @@ public class ShortOrderProcessingService {
                 return;
             }
 
-            Message acceptMsg = new Message();
-            acceptMsg.getHeader().setString(MsgType.FIELD, "p");
+            // Send Short Locate New Order (MsgType=D) to "buy" the locate
+            // Per DAS Spec: "Short Locate New Order/Execution"
+            // Tag 100 Locate Route (must be set)
+            // Tag 54 Side = 1 (Always BUY)
+            // Tag 40 OrdType (Ignored)
+            // Tag 59 TimeInForce (Ignored)
 
+            NewOrderSingle locateOrder = new NewOrderSingle();
+
+            // Use QuoteReqID as ClOrdID so we can match the execution report later
             if (locateRequest.getFixQuoteReqId() != null) {
-                acceptMsg.setString(quickfix.field.QuoteReqID.FIELD, locateRequest.getFixQuoteReqId());
+                locateOrder.set(new ClOrdID(locateRequest.getFixQuoteReqId()));
+            } else {
+                locateOrder.set(new ClOrdID("LOC-EXEC-" + System.currentTimeMillis()));
             }
-            acceptMsg.setString(Symbol.FIELD, locateRequest.getSymbol());
-            acceptMsg.setDouble(OrderQty.FIELD, approvedQty.doubleValue());
-            acceptMsg.setString(quickfix.field.Account.FIELD, locateRequest.getAccount().getAccountNumber());
 
-            session.send(acceptMsg);
-            log.info("Sent Locate Accept (MsgType=p): QuoteReqID={}, Symbol={}, Qty={}",
-                    locateRequest.getFixQuoteReqId(), locateRequest.getSymbol(), approvedQty);
+            locateOrder.set(new Symbol(locateRequest.getSymbol()));
+            locateOrder.set(new Side(Side.BUY)); // Always BUY for locate execution
+            locateOrder.set(new OrderQty(approvedQty.doubleValue()));
+            locateOrder.set(new quickfix.field.Account(locateRequest.getAccount().getAccountNumber()));
+
+            // Required but ignored by DAS for locate
+            locateOrder.set(new OrdType(OrdType.MARKET));
+            locateOrder.set(new TimeInForce(TimeInForce.DAY));
+            locateOrder.set(new TransactTime(java.time.LocalDateTime.now()));
+
+            // Important: Set Locate Route
+            if (locateRequest.getLocateRoute() != null) {
+                locateOrder.set(new ExDestination(locateRequest.getLocateRoute()));
+            } else {
+                log.warn("Locate route missing for request {}, defaulting to 'LOCATE'", locateRequest.getFixQuoteReqId());
+                locateOrder.set(new ExDestination("LOCATE"));
+            }
+
+            session.send(locateOrder);
+            log.info("Sent Short Locate New Order (MsgType=D): ClOrdID={}, Symbol={}, Qty={}, Route={}",
+                    locateRequest.getFixQuoteReqId(), locateRequest.getSymbol(), approvedQty, locateRequest.getLocateRoute());
         } catch (Exception e) {
-            log.error("Error sending locate accept for QuoteReqID={}: {}", locateRequest.getFixQuoteReqId(), e.getMessage(), e);
-            notifyLocateFailure(locateRequest, "Error sending locate accept: " + e.getMessage());
+            log.error("Error sending locate execution order for QuoteReqID={}: {}", locateRequest.getFixQuoteReqId(), e.getMessage(), e);
+            notifyLocateFailure(locateRequest, "Error sending locate execution order: " + e.getMessage());
         }
     }
     
@@ -350,8 +350,12 @@ public class ShortOrderProcessingService {
         if (primaryOrderId != null) {
             // Use QuoteReqID as locateId for coordinator
             shortLocateCoordinator.completeSuccess(primaryOrderId, approvedQty, locateRequest.getFixQuoteReqId(), message);
-            
+
             // Trigger shadow order placement after locate success
+            // Pass offerPx if needed by placementService, otherwise remove it from method signature
+            // For now, we'll just log it to suppress the warning
+            log.debug("Locate success for offerPx={}", offerPx);
+
             placementService.onLocateSuccess(primaryOrderId, approvedQty, locateRequest.getFixQuoteReqId(), initiatorSessionID);
         }
     }

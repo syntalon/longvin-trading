@@ -16,7 +16,9 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Service for placing sell short orders for shadow accounts after locate is approved and stock is borrowed.
@@ -30,16 +32,16 @@ public class ShortOrderPlacementService {
     private final OrderRepository orderRepository;
     private final ShortOrderDraftService draftService;
     private final FixClientProperties properties;
-    private final ShortLocateCoordinator locateCoordinator;
+    private final ShortSellAllocationService allocationService;
 
     public ShortOrderPlacementService(OrderRepository orderRepository,
                                      ShortOrderDraftService draftService,
                                      FixClientProperties properties,
-                                     ShortLocateCoordinator locateCoordinator) {
+                                     ShortSellAllocationService allocationService) {
         this.orderRepository = orderRepository;
         this.draftService = draftService;
         this.properties = properties;
-        this.locateCoordinator = locateCoordinator;
+        this.allocationService = allocationService;
     }
 
     /**
@@ -47,10 +49,13 @@ public class ShortOrderPlacementService {
      * This should be called after locate success.
      * 
      * @param primaryOrder The primary order that triggered the locate request
+     * @param approvedQty The approved quantity from the locate
      * @param initiatorSessionID The initiator session to send orders
      */
     @Transactional
-    public void placeShadowOrdersAfterLocate(Order primaryOrder, SessionID initiatorSessionID) {
+    public void placeShadowOrdersAfterLocate(Order primaryOrder,
+                                             BigDecimal approvedQty,
+                                             SessionID initiatorSessionID) {
         log.info("Placing shadow orders after locate approval for primary order: OrderID={}, Symbol={}, Qty={}",
             primaryOrder.getFixOrderId(), primaryOrder.getSymbol(), primaryOrder.getOrderQty());
 
@@ -61,14 +66,26 @@ public class ShortOrderPlacementService {
             return;
         }
 
+        Map<UUID, BigDecimal> allocations = allocationService.calculateShadowAllocations(primaryOrder, draftOrders, approvedQty);
+        if (allocations.isEmpty()) {
+            log.warn("No shadow allocations computed for primary order {} despite {} draft orders", primaryOrder.getFixOrderId(), draftOrders.size());
+        }
+
         log.info("Found {} draft orders to send for primary order {}", draftOrders.size(), primaryOrder.getFixOrderId());
 
         // Send order for each shadow account
         for (Order draftOrder : draftOrders) {
+            BigDecimal targetQty = allocations.getOrDefault(draftOrder.getId(), BigDecimal.ZERO);
+            if (targetQty == null || targetQty.signum() <= 0) {
+                log.info("Skipping shadow account {} due to zero allocation", draftOrder.getAccount().getAccountNumber());
+                continue;
+            }
+            draftOrder.setOrderQty(targetQty);
+            draftOrder.setLeavesQty(targetQty);
             try {
                 sendShadowOrder(draftOrder, initiatorSessionID);
             } catch (Exception e) {
-                log.error("Error sending shadow order for account {}: {}", 
+                log.error("Error sending shadow order for account {}: {}",
                     draftOrder.getAccount().getAccountNumber(), e.getMessage(), e);
             }
         }
@@ -201,7 +218,6 @@ public class ShortOrderPlacementService {
         Order primaryOrder = primaryOrderOpt.get();
 
         // Place shadow orders
-        placeShadowOrdersAfterLocate(primaryOrder, initiatorSessionID);
+        placeShadowOrdersAfterLocate(primaryOrder, approvedQty, initiatorSessionID);
     }
 }
-

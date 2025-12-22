@@ -2,7 +2,6 @@ package com.longvin.trading.fix;
 
 import com.longvin.trading.config.FixClientProperties;
 import com.longvin.trading.executionReportHandler.ExecutionReportProcessor;
-import com.longvin.trading.processor.impl.LocateResponseHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -21,18 +20,15 @@ public class OrderEntryApplication extends MessageCracker implements Application
     private final FixSessionRegistry sessionRegistry;
     private final InitiatorLogonGuard initiatorLogonGuard;
     private final ExecutionReportProcessor executionReportProcessor;
-    private final LocateResponseHandler locateResponseHandler;
 
     public OrderEntryApplication(FixClientProperties properties,
                                  FixSessionRegistry sessionRegistry,
                                  InitiatorLogonGuard initiatorLogonGuard,
-                                 ExecutionReportProcessor executionReportProcessor,
-                                 LocateResponseHandler locateResponseHandler) {
+                                 ExecutionReportProcessor executionReportProcessor) {
         this.properties = properties;
         this.sessionRegistry = sessionRegistry;
         this.initiatorLogonGuard = initiatorLogonGuard;
         this.executionReportProcessor = executionReportProcessor;
-        this.locateResponseHandler = locateResponseHandler;
     }
 
     @Override
@@ -47,6 +43,7 @@ public class OrderEntryApplication extends MessageCracker implements Application
     }
 
     @Override
+    @SuppressWarnings("resource")
     public void onLogout(SessionID sessionID) {
         sessionRegistry.unregister("initiator", sessionID);
         try {
@@ -158,16 +155,13 @@ public class OrderEntryApplication extends MessageCracker implements Application
             return;
         }
 
-        // Handle ExecutionReports (for locate confirmations with OrdStatus=B)
-        if (quickfix.field.MsgType.EXECUTION_REPORT.equals(msgType)) {
+        // Handle ExecutionReports (MsgType=8) and Short Locate Quote Responses (MsgType=S)
+        // Both are processed by the ExecutionReportProcessor chain
+        if (quickfix.field.MsgType.EXECUTION_REPORT.equals(msgType) || "S".equals(msgType)) {
             executionReportProcessor.process(message, sessionID);
-        } else if ("S".equals(msgType)) {
-            // Handle Quote (Short Locate Quote Response)
-            locateResponseHandler.processLocateResponse(message, sessionID);
         } else {
             // Other message types
             crack(message, sessionID);
         }
     }
 }
-

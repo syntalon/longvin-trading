@@ -5,6 +5,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -16,14 +17,15 @@ public class LocateDecisionService {
 
 
     public boolean shouldAcceptLocateOffer(ExecutionReportContext context) {
-        if (context.getLeavesQty() < context.getOrderQty()) {
+        if (context.getLeavesQty().compareTo(context.getOrderQty()) < 0) {
             log.info("Rejecting locate offer - insufficient quantity. Required: {}, Available: {}",
                     context.getOrderQty(), context.getLeavesQty());
             return false;
         }
 
 
-        double estimatedCost = context.getAvgPx() * context.getOrderQty();
+        BigDecimal price = context.getAvgPx() != null ? context.getAvgPx() : BigDecimal.ZERO;
+        double estimatedCost = price.multiply(context.getOrderQty()).doubleValue();
         if (estimatedCost > getMaximumAcceptableCost(context)) {
             log.info("Rejecting locate offer - cost too high: {}", estimatedCost);
             return false;
@@ -52,11 +54,12 @@ public class LocateDecisionService {
     }
 
     private double getMaximumAcceptableCost(ExecutionReportContext context) {
+        // Use context to determine max cost if needed, e.g. based on account balance
         return 1000000.0;
     }
 
     private boolean isAccountAllowedToBorrow(String account) {
-
+        // Check account permissions
         return true;
     }
 }
