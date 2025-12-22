@@ -81,10 +81,10 @@ ENV JAVA_OPTS="-Xmx512m -Xms256m -XX:+UseContainerSupport -XX:MaxRAMPercentage=7
 ENV SPRING_PROFILES_ACTIVE=prod
 
 # Set default log directory (can be overridden via environment variable)
-ENV LOG_DIR=/app/logs
+ENV LOG_DIR=/data/app/longvin-trading/logs
 
-# Create log directory with proper permissions
-RUN mkdir -p /app/logs && chmod 755 /app/logs
+# Create log directory structure with proper permissions
+RUN mkdir -p /data/app/longvin-trading/logs && chmod -R 755 /data/app/longvin-trading
 
 # Run the application
 # Pass LOG_DIR as system property (-D) so logback can read it reliably

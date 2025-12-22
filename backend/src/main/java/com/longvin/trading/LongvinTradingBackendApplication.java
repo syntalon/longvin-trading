@@ -16,14 +16,20 @@ public class LongvinTradingBackendApplication {
 	static {
 		// Set LOG_DIR as system property before logback initializes
 		// Logback can access system properties more reliably than environment variables
-		String logDir = System.getenv("LOG_DIR");
-		if (logDir == null) {
-			logDir = System.getProperty("LOG_DIR");
+		// Priority: System property (-DLOG_DIR) > Environment variable (LOG_DIR) > Default (logs)
+		String logDir = System.getProperty("LOG_DIR"); // Check system property first (set by -D flag)
+		if (logDir == null || logDir.isEmpty()) {
+			logDir = System.getenv("LOG_DIR"); // Fall back to environment variable
 		}
-		if (logDir != null && !logDir.isEmpty()) {
-			// Set as system property so logback can access it
-			System.setProperty("LOG_DIR", logDir);
+		if (logDir == null || logDir.isEmpty()) {
+			logDir = "logs"; // Default relative path
 		}
+		
+		// Always set as system property so logback can access it
+		System.setProperty("LOG_DIR", logDir);
+		System.out.println("[Logging] LOG_DIR set to: " + logDir + " (from " + 
+			(System.getProperty("LOG_DIR") != null && System.getProperty("LOG_DIR").equals(logDir) ? 
+				(System.getenv("LOG_DIR") != null ? "env var" : "system property") : "default") + ")");
 		
 		// Create log directory before logback initializes
 		// This runs before Spring Boot starts, ensuring logback can write to files
