@@ -14,6 +14,17 @@ import java.nio.file.Paths;
 public class LongvinTradingBackendApplication {
 
 	static {
+		// Set LOG_DIR as system property before logback initializes
+		// Logback can access system properties more reliably than environment variables
+		String logDir = System.getenv("LOG_DIR");
+		if (logDir == null) {
+			logDir = System.getProperty("LOG_DIR");
+		}
+		if (logDir != null && !logDir.isEmpty()) {
+			// Set as system property so logback can access it
+			System.setProperty("LOG_DIR", logDir);
+		}
+		
 		// Create log directory before logback initializes
 		// This runs before Spring Boot starts, ensuring logback can write to files
 		ensureLogDirectoryExists();
@@ -28,12 +39,14 @@ public class LongvinTradingBackendApplication {
 	 * This runs in a static block, which executes before Spring Boot initialization.
 	 */
 	private static void ensureLogDirectoryExists() {
-		String logDir = System.getenv("LOG_DIR");
-		if (logDir == null) {
-			logDir = System.getProperty("LOG_DIR");
+		// Get LOG_DIR from system property (set in static block above) or environment variable
+		String logDir = System.getProperty("LOG_DIR");
+		if (logDir == null || logDir.isEmpty()) {
+			logDir = System.getenv("LOG_DIR");
 		}
-		if (logDir == null) {
+		if (logDir == null || logDir.isEmpty()) {
 			logDir = "logs"; // Default relative path
+			System.setProperty("LOG_DIR", logDir); // Set default as system property
 		}
 
 		try {
