@@ -10,14 +10,18 @@
     </appender>
 
     <appender name="logFile" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>logs/chiaManager.log</file>
+        <!-- Use environment variable LOG_DIR or default to ./logs relative to working directory -->
+        <!-- For Azure VM, set LOG_DIR=/var/log/longvin-trading or similar absolute path -->
+        <file>${LOG_DIR:-logs}/chiaManager.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>logs/longvinTrading-%d{yyyy-MM-dd}.log</fileNamePattern>
+            <fileNamePattern>${LOG_DIR:-logs}/longvinTrading-%d{yyyy-MM-dd}.log</fileNamePattern>
             <maxHistory>60</maxHistory>
         </rollingPolicy>
         <encoder>
             <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36}:%L - %msg%n</pattern>
         </encoder>
+        <!-- Create directory if it doesn't exist -->
+        <prudent>false</prudent>
     </appender>
 
 
