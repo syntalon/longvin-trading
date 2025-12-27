@@ -201,7 +201,68 @@ public class FixSessionManager implements SmartLifecycle {
             throw new IllegalStateException("FIX settings resource not found: " + properties.getConfigPath());
         }
         try (InputStream inputStream = resource.getInputStream()) {
-            return new SessionSettings(inputStream);
+            SessionSettings settings = new SessionSettings(inputStream);
+            overrideFixPaths(settings);
+            return settings;
+        }
+    }
+    
+    /**
+     * Override FileStorePath and FileLogPath with configurable absolute paths.
+     * This ensures FIX logs and store are written to a proper location on Azure VM.
+     */
+    private void overrideFixPaths(SessionSettings settings) throws ConfigError {
+        // Get FIX base directory from environment variable or system property
+        String fixBaseDir = System.getProperty("FIX_BASE_DIR");
+        if (fixBaseDir == null || fixBaseDir.isEmpty()) {
+            fixBaseDir = System.getenv("FIX_BASE_DIR");
+        }
+        if (fixBaseDir == null || fixBaseDir.isEmpty()) {
+            // Default to same location as application logs
+            String logDir = System.getProperty("LOG_DIR");
+            if (logDir == null || logDir.isEmpty()) {
+                logDir = System.getenv("LOG_DIR");
+            }
+            if (logDir != null && !logDir.isEmpty()) {
+                // Use parent directory of logs, then add quickfix subdirectory
+                fixBaseDir = logDir.replaceFirst("/logs$", "") + "/quickfix";
+            } else {
+                // Fallback to absolute path in /data/app/longvin-trading
+                fixBaseDir = "/data/app/longvin-trading/quickfix";
+            }
+        }
+        
+        String fileStorePath = fixBaseDir + "/store";
+        String fileLogPath = fixBaseDir + "/log";
+        
+        // Override in DEFAULT section
+        Properties defaults = settings.getDefaultProperties();
+        if (defaults != null) {
+            defaults.setProperty("FileStorePath", fileStorePath);
+            defaults.setProperty("FileLogPath", fileLogPath);
+            settings.set(toDictionary(defaults));
+        }
+        
+        // Override in all session sections
+        Iterator<SessionID> sessionIterator = settings.sectionIterator();
+        while (sessionIterator.hasNext()) {
+            SessionID sessionID = sessionIterator.next();
+            Properties sessionProps = settings.getSessionProperties(sessionID);
+            if (sessionProps != null) {
+                sessionProps.setProperty("FileStorePath", fileStorePath);
+                sessionProps.setProperty("FileLogPath", fileLogPath);
+                settings.set(sessionID, toDictionary(sessionProps));
+            }
+        }
+        
+        // Create directories
+        try {
+            java.nio.file.Files.createDirectories(java.nio.file.Paths.get(fileStorePath));
+            java.nio.file.Files.createDirectories(java.nio.file.Paths.get(fileLogPath));
+            log.info("FIX paths configured - Store: {}, Log: {}", fileStorePath, fileLogPath);
+        } catch (IOException e) {
+            log.error("Failed to create FIX directories: {}", e.getMessage(), e);
+            throw new IllegalStateException("Failed to create FIX directories", e);
         }
     }
 

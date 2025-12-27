@@ -24,10 +24,14 @@ services:
       # Logging - LOG_DIR must be set and passed as system property (-D) for logback
       LOG_DIR: /data/app/longvin-trading/logs
       LOGGING_FILE_NAME: logs/longvin-trading.log
+      # FIX logging - FIX_BASE_DIR for QuickFIX/J logs and store (defaults to /data/app/longvin-trading/quickfix if not set)
+      FIX_BASE_DIR: /data/app/longvin-trading/quickfix
       # Java options (can be overridden)
       # Note: LOG_DIR is passed as system property in Dockerfile ENTRYPOINT
       JAVA_OPTS: "-Xmx512m -Xms256m -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
     volumes:
       # Mount log directory to persist logs on host
       - ./logs:/data/app/longvin-trading/logs
+      # Mount FIX directory to persist FIX logs and store on host
+      - ./quickfix:/data/app/longvin-trading/quickfix
     restart: unless-stopped

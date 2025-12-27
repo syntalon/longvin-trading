@@ -19,8 +19,14 @@ ENV JAVA_OPTS="-Xmx512m -Xms256m -XX:+UseContainerSupport -XX:MaxRAMPercentage=7
 # Set default log directory (can be overridden via environment variable)
 ENV LOG_DIR=/data/app/longvin-trading/logs
 
-# Create log directory structure with proper permissions
-RUN mkdir -p /data/app/longvin-trading/logs && chmod -R 755 /data/app/longvin-trading
+# Set default FIX base directory for QuickFIX/J logs and store
+ENV FIX_BASE_DIR=/data/app/longvin-trading/quickfix
+
+# Create log and FIX directories with proper permissions
+RUN mkdir -p /data/app/longvin-trading/logs && \
+    mkdir -p /data/app/longvin-trading/quickfix/store && \
+    mkdir -p /data/app/longvin-trading/quickfix/log && \
+    chmod -R 755 /data/app/longvin-trading
 
 # Run the application
 # Pass LOG_DIR as system property (-D) so logback can read it reliably
