@@ -5,6 +5,8 @@
 
 # QuickFIX/J runtime artifacts
 /backend/quickfix/
+/quickfix/
+target/quickfix/
 
 # OS / IDE metadata
 .DS_Store
