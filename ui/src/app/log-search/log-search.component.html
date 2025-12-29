@@ -1,0 +1,134 @@
+<div class="log-search-container">
+  <div class="header">
+    <h1>Log Search</h1>
+    <p class="subtitle">Search and view application logs</p>
+  </div>
+
+  <div class="search-panel">
+    <div class="search-form">
+      <div class="form-group">
+        <label for="searchQuery">Search Text</label>
+        <input
+          type="text"
+          id="searchQuery"
+          [(ngModel)]="searchQuery"
+          placeholder="Enter search text (case-insensitive)"
+          (keyup.enter)="searchLogs()"
+          class="form-control"
+        />
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="selectedFile">Log File</label>
+          <select id="selectedFile" [(ngModel)]="selectedFile" class="form-control">
+            <option value="all">All Files</option>
+            <option *ngFor="let file of availableFiles" [value]="file">{{ file }}</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="maxLines">Max Lines</label>
+          <input
+            type="number"
+            id="maxLines"
+            [(ngModel)]="maxLines"
+            min="1"
+            max="10000"
+            class="form-control"
+          />
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="fromDate">From Date</label>
+          <input
+            type="date"
+            id="fromDate"
+            [(ngModel)]="fromDate"
+            class="form-control"
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="toDate">To Date</label>
+          <input
+            type="date"
+            id="toDate"
+            [(ngModel)]="toDate"
+            class="form-control"
+          />
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" (click)="searchLogs()" [disabled]="loading" class="btn btn-primary">
+          {{ loading ? 'Searching...' : 'Search' }}
+        </button>
+        <button type="button" (click)="clearSearch()" [disabled]="loading" class="btn btn-secondary">
+          Clear
+        </button>
+        <button type="button" (click)="loadRecentLogs()" [disabled]="loading" class="btn btn-secondary">
+          Show Recent
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="auto-refresh-panel">
+    <div class="auto-refresh-controls">
+      <label class="auto-refresh-toggle">
+        <input
+          type="checkbox"
+          [(ngModel)]="autoRefreshEnabled"
+          (change)="onAutoRefreshChange()"
+        />
+        <span>Auto Refresh</span>
+        <span class="refresh-indicator" *ngIf="autoRefreshEnabled">
+          <span class="pulse-dot"></span> Refreshing every {{ refreshInterval }}s
+        </span>
+      </label>
+      <div class="refresh-interval" *ngIf="autoRefreshEnabled">
+        <label for="refreshInterval">Interval (seconds):</label>
+        <input
+          type="number"
+          id="refreshInterval"
+          [(ngModel)]="refreshInterval"
+          (change)="onRefreshIntervalChange()"
+          min="1"
+          max="60"
+          class="form-control interval-input"
+        />
+      </div>
+    </div>
+  </div>
+
+  <div class="results-panel" *ngIf="error || logEntries.length > 0 || searchPerformed">
+    <div class="results-header">
+      <h2>Results <span class="newest-first-badge">Newest First</span></h2>
+      <span class="result-count" *ngIf="!error">
+        {{ logEntries.length }} {{ logEntries.length === 1 ? 'entry' : 'entries' }}
+      </span>
+    </div>
+
+    <div class="error-message" *ngIf="error">
+      <strong>Error:</strong> {{ error }}
+    </div>
+
+    <div class="log-entries" *ngIf="!error && logEntries.length > 0">
+      <div class="log-entry" *ngFor="let entry of logEntries">
+        <div class="entry-header">
+          <span class="file-name">{{ entry.fileName }}</span>
+          <span class="line-number">Line {{ entry.lineNumber }}</span>
+        </div>
+        <div class="entry-content" [innerHTML]="highlightText(entry.content, searchQuery)"></div>
+      </div>
+    </div>
+
+    <div class="no-results" *ngIf="!error && logEntries.length === 0 && searchPerformed">
+      No log entries found matching your search criteria.
+    </div>
+  </div>
+</div>
+
