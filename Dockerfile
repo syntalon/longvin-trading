@@ -21,11 +21,21 @@ COPY ui/package*.json ./
 # With BuildKit, cache mount can be used: --mount=type=cache,target=/root/.npm
 RUN npm ci --prefer-offline --no-audit --progress --verbose
 
-# Copy UI source code
-COPY ui/ ./
+# Copy UI source code (explicitly copy all necessary files)
+COPY ui/src ./src
+COPY ui/public ./public
+COPY ui/angular.json ./
+COPY ui/tsconfig*.json ./
+
+# Verify critical files are copied
+RUN echo "Checking source files..." && \
+    ls -la src/app/ && \
+    test -f src/app/app.routes.ts && echo "✅ app.routes.ts found" || (echo "❌ app.routes.ts MISSING" && exit 1) && \
+    test -f src/app/app.config.ts && echo "✅ app.config.ts found" || (echo "❌ app.config.ts MISSING" && exit 1)
 
 # Build Angular application for production
-RUN npm run build
+# Increase Node memory limit for build process
+RUN NODE_OPTIONS="--max-old-space-size=4096" npm run build
 
 # Stage 2: Build Spring Boot backend with Maven
 FROM maven:3.9-eclipse-temurin-17 AS backend-builder
