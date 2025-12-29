@@ -1,12 +1,15 @@
-<main class="app-shell">
-  <section class="hero">
-    <h1>Longvin Trading</h1>
-    <p class="tagline">
-      This Angular UI is bundled with the Spring Boot backend and served from a single executable JAR.
-    </p>
-    <div class="actions">
-      <a class="action-link" href="https://angular.dev" target="_blank" rel="noopener">Angular Docs</a>
-      <a class="action-link" href="https://spring.io/projects/spring-boot" target="_blank" rel="noopener">Spring Boot Docs</a>
+<div class="app-container">
+  <nav class="navbar">
+    <div class="nav-content">
+      <a routerLink="/" class="nav-brand">Longvin Trading</a>
+      <div class="nav-links">
+        <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{exact: true}" class="nav-link">Home</a>
+        <a routerLink="/logs" routerLinkActive="active" class="nav-link">Log Search</a>
+      </div>
     </div>
-  </section>
-</main>
+  </nav>
+
+  <main class="main-content">
+    <router-outlet></router-outlet>
+  </main>
+</div>
