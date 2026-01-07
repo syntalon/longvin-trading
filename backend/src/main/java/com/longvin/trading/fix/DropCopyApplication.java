@@ -26,6 +26,11 @@ public class DropCopyApplication extends MessageCracker implements Application {
     // Track recent messages from drop copy session (last 100 messages)
     private final BlockingQueue<ReceivedMessage> recentDropCopyMessages = 
         new LinkedBlockingQueue<>(100);
+    
+    // Diagnostic counters
+    private volatile int adminMessageCount = 0;
+    private volatile int appMessageCount = 0;
+    private volatile long firstAppMessageTime = 0;
 
     public DropCopyApplication(FixSessionRegistry sessionRegistry,
                                ExecutionReportProcessor executionReportProcessor) {
@@ -96,8 +101,25 @@ public class DropCopyApplication extends MessageCracker implements Application {
 
     @Override
     public void fromAdmin(Message message, SessionID sessionID) throws FieldNotFound, IncorrectTagValue, RejectLogon {
+        adminMessageCount++;
+        
         // Log all admin messages received from drop copy session for debugging
         logDropCopyMessageReceived("ADMIN", message, sessionID);
+        
+        // Log a warning if we're only receiving admin messages (heartbeats) and no app messages
+        try {
+            String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
+            if ("0".equals(msgType)) {
+                // Heartbeat - log diagnostic summary every 10 heartbeats
+                if (adminMessageCount % 10 == 0) {
+                    log.warn("[DROP COPY DIAGNOSTIC] Received {} admin messages (mostly heartbeats), but only {} application messages. " +
+                        "If appMessageCount is 0, DAS Trader is NOT sending ExecutionReports or they are being rejected before reaching fromApp(). " +
+                        "Check QuickFIX logs for message rejections.", adminMessageCount, appMessageCount);
+                }
+            }
+        } catch (Exception e) {
+            // Ignore
+        }
         
         // Handle sequence number synchronization for drop copy acceptor sessions
         try {
@@ -165,6 +187,22 @@ public class DropCopyApplication extends MessageCracker implements Application {
     @Override
     public void fromApp(Message message, SessionID sessionID)
             throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
+        appMessageCount++;
+        
+        // Log when first app message is received
+        if (firstAppMessageTime == 0) {
+            firstAppMessageTime = System.currentTimeMillis();
+            try {
+                String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
+                String msgTypeName = getMsgTypeName(msgType);
+                log.warn("[DROP COPY DIAGNOSTIC] ✅ FIRST APPLICATION MESSAGE RECEIVED! Type: {} ({}), " +
+                    "after {} admin messages. This confirms fromApp() is being called and DAS Trader IS sending application messages.", 
+                    msgTypeName, msgType, adminMessageCount);
+            } catch (Exception e) {
+                log.warn("[DROP COPY DIAGNOSTIC] ✅ FIRST APPLICATION MESSAGE RECEIVED! (after {} admin messages)", adminMessageCount);
+            }
+        }
+        
         // Log all application messages received from drop copy session for debugging
         logDropCopyMessageReceived("APP", message, sessionID);
         
@@ -175,7 +213,21 @@ public class DropCopyApplication extends MessageCracker implements Application {
         logIncomingDASMessage(message, sessionID);
 
         // Crack the message for business logic processing
-        crack(message, sessionID);
+        try {
+            crack(message, sessionID);
+        } catch (UnsupportedMessageType e) {
+            log.warn("[DROP COPY DEBUG] Unsupported message type in fromApp: {}", e.getMessage());
+            throw e;
+        } catch (IncorrectTagValue e) {
+            log.warn("[DROP COPY DEBUG] Incorrect tag value in fromApp: {}", e.getMessage());
+            throw e;
+        } catch (FieldNotFound e) {
+            log.warn("[DROP COPY DEBUG] Field not found in fromApp: {}", e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            log.error("[DROP COPY DEBUG] Unexpected error in fromApp: {}", e.getMessage(), e);
+            throw e;
+        }
     }
 
     @Override
@@ -241,8 +293,16 @@ public class DropCopyApplication extends MessageCracker implements Application {
             String targetCompId = message.getHeader().getString(quickfix.field.TargetCompID.FIELD);
             
             // Log the raw message for debugging
-            log.info("[DROP COPY DEBUG] Received {} message from drop copy session - Type: {} ({}), SeqNum: {}, Session: {} -> {}, Raw: {}", 
-                category, msgTypeName, msgType, seqNum, senderCompId, targetCompId, message.toString());
+            // Use WARN level for non-heartbeat messages to make them more visible
+            if ("0".equals(msgType)) {
+                // Heartbeat - log at INFO to reduce noise
+                log.info("[DROP COPY DEBUG] Received {} message from drop copy session - Type: {} ({}), SeqNum: {}, Session: {} -> {}", 
+                    category, msgTypeName, msgType, seqNum, senderCompId, targetCompId);
+            } else {
+                // Non-heartbeat messages - log at WARN to make them more visible
+                log.warn("[DROP COPY DEBUG] Received {} message from drop copy session - Type: {} ({}), SeqNum: {}, Session: {} -> {}, Raw: {}", 
+                    category, msgTypeName, msgType, seqNum, senderCompId, targetCompId, message.toString());
+            }
         } catch (Exception e) {
             log.warn("[DROP COPY DEBUG] Could not log drop copy message details: {}", e.getMessage(), e);
         }
