@@ -96,6 +96,9 @@ ENV LOG_DIR=/data/app/longvin-trading/logs
 # Set default FIX base directory for QuickFIX/J logs and store
 ENV FIX_BASE_DIR=/data/app/longvin-trading/quickfix
 
+# Set timezone to America/New_York (Eastern Time)
+ENV TZ=America/New_York
+
 # Create log and FIX directories with proper permissions
 RUN mkdir -p /data/app/longvin-trading/logs && \
     mkdir -p /data/app/longvin-trading/quickfix/store && \
@@ -103,6 +106,6 @@ RUN mkdir -p /data/app/longvin-trading/logs && \
     chmod -R 755 /data/app/longvin-trading
 
 # Run the application
-# Pass LOG_DIR as system property (-D) so logback can read it reliably
-ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -DLOG_DIR=${LOG_DIR} -jar app.jar"]
+# Pass LOG_DIR and timezone as system properties (-D) so logback can read them reliably
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -DLOG_DIR=${LOG_DIR} -Duser.timezone=America/New_York -jar app.jar"]
 

@@ -29,6 +29,7 @@ public class LogFileMonitor {
     
     private final LoggerContext loggerContext;
     private boolean lastCheckFailed = false;
+    private boolean hasWarnedAboutStaleFile = false; // Track if we've already warned about stale file
     
     public LogFileMonitor() {
         this.loggerContext = (LoggerContext) LoggerFactory.getILoggerFactory();
@@ -66,9 +67,9 @@ public class LogFileMonitor {
     
     /**
      * Periodically check if log file appender is working correctly
-     * Runs every 5 minutes
+     * Runs every 15 minutes (less frequent to reduce noise)
      */
-    @Scheduled(fixedRate = 300000) // 5 minutes
+    @Scheduled(fixedRate = 900000) // 15 minutes
     public void periodicCheck() {
         checkLogFileAppenderStatus();
     }
@@ -117,12 +118,25 @@ public class LogFileMonitor {
                                 long now = System.currentTimeMillis();
                                 long timeSinceLastWrite = now - lastModified;
                                 
-                                // If file hasn't been modified in last 10 minutes, something might be wrong
-                                if (timeSinceLastWrite > 600000) { // 10 minutes
-                                    log.warn("[LOGFILE WARNING] Log file has not been modified in {} minutes: {}", 
-                                        timeSinceLastWrite / 60000, filePath.toAbsolutePath());
-                                    log.warn("[LOGFILE WARNING] This might indicate logging is not working properly.");
+                                // If file hasn't been modified in last 60 minutes, something might be wrong
+                                // Only warn once to avoid log spam during quiet periods
+                                if (timeSinceLastWrite > 3600000) { // 60 minutes
+                                    if (!hasWarnedAboutStaleFile) {
+                                        log.warn("[LOGFILE WARNING] Log file has not been modified in {} minutes: {}", 
+                                            timeSinceLastWrite / 60000, filePath.toAbsolutePath());
+                                        log.warn("[LOGFILE WARNING] This might indicate logging is not working properly.");
+                                        hasWarnedAboutStaleFile = true;
+                                    } else {
+                                        // Only log at DEBUG level after first warning to reduce noise
+                                        log.debug("[LOGFILE WARNING] Log file still not modified ({} minutes): {}", 
+                                            timeSinceLastWrite / 60000, filePath.toAbsolutePath());
+                                    }
                                 } else {
+                                    // File is being written to - reset warning flag
+                                    if (hasWarnedAboutStaleFile) {
+                                        log.info("[LOGFILE OK] Log file is now being written to: {}", filePath.toAbsolutePath());
+                                        hasWarnedAboutStaleFile = false;
+                                    }
                                     if (lastCheckFailed) {
                                         log.info("[LOGFILE OK] Log file appender is now working correctly: {}", filePath.toAbsolutePath());
                                         lastCheckFailed = false;
