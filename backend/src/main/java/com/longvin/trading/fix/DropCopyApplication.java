@@ -96,6 +96,9 @@ public class DropCopyApplication extends MessageCracker implements Application {
 
     @Override
     public void fromAdmin(Message message, SessionID sessionID) throws FieldNotFound, IncorrectTagValue, RejectLogon {
+        // Log all admin messages received from drop copy session for debugging
+        logDropCopyMessageReceived("ADMIN", message, sessionID);
+        
         // Handle sequence number synchronization for drop copy acceptor sessions
         try {
             String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
@@ -162,6 +165,9 @@ public class DropCopyApplication extends MessageCracker implements Application {
     @Override
     public void fromApp(Message message, SessionID sessionID)
             throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
+        // Log all application messages received from drop copy session for debugging
+        logDropCopyMessageReceived("APP", message, sessionID);
+        
         // Track the message for REST API
         trackDropCopyMessage(sessionID, message);
         
@@ -219,6 +225,26 @@ public class DropCopyApplication extends MessageCracker implements Application {
             }
         } catch (Exception e) {
             log.debug("Could not track message: {}", e.getMessage());
+        }
+    }
+    
+    /**
+     * Log all messages received from drop copy session for debugging purposes.
+     * This logs every message (both admin and application) with full details.
+     */
+    private void logDropCopyMessageReceived(String category, Message message, SessionID sessionID) {
+        try {
+            String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
+            String msgTypeName = getMsgTypeName(msgType);
+            int seqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
+            String senderCompId = message.getHeader().getString(quickfix.field.SenderCompID.FIELD);
+            String targetCompId = message.getHeader().getString(quickfix.field.TargetCompID.FIELD);
+            
+            // Log the raw message for debugging
+            log.info("[DROP COPY DEBUG] Received {} message from drop copy session - Type: {} ({}), SeqNum: {}, Session: {} -> {}, Raw: {}", 
+                category, msgTypeName, msgType, seqNum, senderCompId, targetCompId, message.toString());
+        } catch (Exception e) {
+            log.warn("[DROP COPY DEBUG] Could not log drop copy message details: {}", e.getMessage(), e);
         }
     }
     
