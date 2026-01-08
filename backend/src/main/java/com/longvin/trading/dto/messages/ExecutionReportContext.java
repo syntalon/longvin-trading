@@ -100,9 +100,14 @@ public class ExecutionReportContext {
         this.symbol = message.getString(Symbol.FIELD);
         this.side = message.getChar(Side.FIELD);
         
-        // Quantities (required)
+        // Quantities
         this.orderQty = BigDecimal.valueOf(message.getDouble(OrderQty.FIELD));
-        this.cumQty = BigDecimal.valueOf(message.getDouble(CumQty.FIELD));
+        // CumQty (field 14) is optional - DAS Trader may not always include it
+        if (message.isSetField(CumQty.FIELD)) {
+            this.cumQty = BigDecimal.valueOf(message.getDouble(CumQty.FIELD));
+        } else {
+            this.cumQty = BigDecimal.ZERO; // Default to zero if not present
+        }
         this.leavesQty = BigDecimal.valueOf(message.getDouble(LeavesQty.FIELD));
 
         // Optional fields
