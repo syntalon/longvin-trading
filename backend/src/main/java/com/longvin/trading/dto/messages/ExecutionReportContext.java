@@ -108,7 +108,14 @@ public class ExecutionReportContext {
         } else {
             this.cumQty = BigDecimal.ZERO; // Default to zero if not present
         }
-        this.leavesQty = BigDecimal.valueOf(message.getDouble(LeavesQty.FIELD));
+        // LeavesQty (field 151) is optional - DAS Trader may not always include it
+        if (message.isSetField(LeavesQty.FIELD)) {
+            this.leavesQty = BigDecimal.valueOf(message.getDouble(LeavesQty.FIELD));
+        } else {
+            // If LeavesQty is missing, calculate it from OrderQty - CumQty
+            // If CumQty is also missing (defaults to 0), then LeavesQty = OrderQty
+            this.leavesQty = this.orderQty.subtract(this.cumQty);
+        }
 
         // Optional fields
         if (message.isSetField(OrigClOrdID.FIELD)) {
