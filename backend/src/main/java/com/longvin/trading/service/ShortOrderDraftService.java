@@ -5,7 +5,6 @@ import com.longvin.trading.entities.accounts.Account;
 import com.longvin.trading.entities.accounts.AccountType;
 import com.longvin.trading.entities.orders.Order;
 import com.longvin.trading.entities.orders.OrderGroup;
-import com.longvin.trading.repository.AccountRepository;
 import com.longvin.trading.repository.OrderGroupRepository;
 import com.longvin.trading.repository.OrderRepository;
 import org.slf4j.Logger;
@@ -29,16 +28,16 @@ public class ShortOrderDraftService {
 
     private final OrderRepository orderRepository;
     private final OrderGroupRepository orderGroupRepository;
-    private final AccountRepository accountRepository;
+    private final AccountCacheService accountCacheService;
     private final FixClientProperties properties;
 
     public ShortOrderDraftService(OrderRepository orderRepository,
                                   OrderGroupRepository orderGroupRepository,
-                                  AccountRepository accountRepository,
+                                  AccountCacheService accountCacheService,
                                   FixClientProperties properties) {
         this.orderRepository = orderRepository;
         this.orderGroupRepository = orderGroupRepository;
-        this.accountRepository = accountRepository;
+        this.accountCacheService = accountCacheService;
         this.properties = properties;
     }
 
@@ -55,7 +54,7 @@ public class ShortOrderDraftService {
             primaryOrder.getFixOrderId(), primaryOrder.getSymbol(), primaryOrder.getSide(), primaryOrder.getOrderQty());
 
         // Get all active shadow accounts
-        List<Account> shadowAccounts = accountRepository.findActiveShadowAccounts();
+        List<Account> shadowAccounts = accountCacheService.findActiveShadowAccounts();
         if (shadowAccounts.isEmpty()) {
             log.warn("No shadow accounts found, cannot create draft orders for order {}", primaryOrder.getFixOrderId());
             return new ArrayList<>();

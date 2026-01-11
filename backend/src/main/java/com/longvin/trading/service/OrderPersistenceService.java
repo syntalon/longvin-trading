@@ -5,7 +5,6 @@ import com.longvin.trading.entities.accounts.AccountType;
 import com.longvin.trading.entities.orders.Order;
 import com.longvin.trading.entities.orders.OrderEvent;
 import com.longvin.trading.entities.orders.OrderGroup;
-import com.longvin.trading.repository.AccountRepository;
 import com.longvin.trading.repository.OrderEventRepository;
 import com.longvin.trading.repository.OrderGroupRepository;
 import com.longvin.trading.repository.OrderRepository;
@@ -36,16 +35,16 @@ public class OrderPersistenceService {
     private final OrderRepository orderRepository;
     private final OrderEventRepository orderEventRepository;
     private final OrderGroupRepository orderGroupRepository;
-    private final AccountRepository accountRepository;
+    private final AccountCacheService accountCacheService;
 
     public OrderPersistenceService(OrderRepository orderRepository,
                                    OrderEventRepository orderEventRepository,
                                    OrderGroupRepository orderGroupRepository,
-                                   AccountRepository accountRepository) {
+                                   AccountCacheService accountCacheService) {
         this.orderRepository = orderRepository;
         this.orderEventRepository = orderEventRepository;
         this.orderGroupRepository = orderGroupRepository;
-        this.accountRepository = accountRepository;
+        this.accountCacheService = accountCacheService;
     }
 
     /**
@@ -165,7 +164,7 @@ public class OrderPersistenceService {
         // Account
         if (report.isSetField(quickfix.field.Account.FIELD)) {
             String accountNumber = report.getString(quickfix.field.Account.FIELD);
-            Optional<Account> account = accountRepository.findByAccountNumber(accountNumber);
+            Optional<Account> account = accountCacheService.findByAccountNumber(accountNumber);
             if (account.isPresent()) {
                 builder.account(account.get());
             } else {

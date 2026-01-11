@@ -3,7 +3,7 @@ package com.longvin.trading.executionReportHandler;
 import com.longvin.trading.dto.messages.ExecutionReportContext;
 import com.longvin.trading.entities.accounts.Account;
 import com.longvin.trading.entities.orders.Order;
-import com.longvin.trading.repository.AccountRepository;
+import com.longvin.trading.service.AccountCacheService;
 import com.longvin.trading.service.ShortOrderDraftService;
 import com.longvin.trading.service.ShortOrderProcessingService;
 import org.slf4j.Logger;
@@ -28,14 +28,14 @@ public class NewOrderHandler implements ExecutionReportHandler {
     
     private final ShortOrderProcessingService shortOrderProcessingService;
     private final ShortOrderDraftService shortOrderDraftService;
-    private final AccountRepository accountRepository;
+    private final AccountCacheService accountCacheService;
 
     public NewOrderHandler(ShortOrderProcessingService shortOrderProcessingService,
                           ShortOrderDraftService shortOrderDraftService,
-                          AccountRepository accountRepository) {
+                          AccountCacheService accountCacheService) {
         this.shortOrderProcessingService = shortOrderProcessingService;
         this.shortOrderDraftService = shortOrderDraftService;
-        this.accountRepository = accountRepository;
+        this.accountCacheService = accountCacheService;
     }
 
 
@@ -95,7 +95,7 @@ public class NewOrderHandler implements ExecutionReportHandler {
         if (context.getAccount() != null) {
             // We need an Account entity, try to find it or create a placeholder
             // For locate request purposes, we mainly need the account number
-            Optional<Account> accountOpt = accountRepository.findByAccountNumber(context.getAccount());
+            Optional<Account> accountOpt = accountCacheService.findByAccountNumber(context.getAccount());
             if (accountOpt.isPresent()) {
                 order.setAccount(accountOpt.get());
             } else {

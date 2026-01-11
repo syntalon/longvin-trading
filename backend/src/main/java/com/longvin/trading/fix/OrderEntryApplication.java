@@ -87,13 +87,31 @@ public class OrderEntryApplication extends MessageCracker implements Application
                 }
             }
         } catch (Exception e) {
-            log.debug("Error processing toAdmin for order-entry session {}: {}", sessionID, e.getMessage());
+            // DoNotSend is intentionally thrown to suppress message sending (e.g., when logon is suppressed)
+            // QuickFIX/J framework handles this exception and prevents the message from being sent
+            // This is expected behavior, not an error, so we don't log it - re-throw using type erasure
+            if (e instanceof DoNotSend) {
+                rethrowDoNotSend((DoNotSend) e);
+            }
+            // Log other exceptions as warnings
+            String errorMsg = e.getMessage();
+            if (errorMsg == null) {
+                log.warn("Error processing toAdmin for order-entry session {}: {} - {}", 
+                    sessionID, e.getClass().getSimpleName(), e);
+            } else {
+                log.warn("Error processing toAdmin for order-entry session {}: {}", sessionID, errorMsg, e);
+            }
         }
     }
     
     @SuppressWarnings("unchecked")
     private <T extends Throwable> void throwDoNotSendUnchecked() throws T {
         throw (T) new DoNotSend();
+    }
+    
+    @SuppressWarnings("unchecked")
+    private <T extends Throwable> void rethrowDoNotSend(DoNotSend e) throws T {
+        throw (T) e;
     }
 
     @Override

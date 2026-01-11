@@ -56,6 +56,10 @@ logging:
 trading:
   initiator:
     non-trading-resume-hour: ${TRADING_NON_TRADING_RESUME_HOUR:6}
+  accounts:
+    # Enable/disable automatic account data initialization on startup
+    # Creates: OPAL broker, OS111 DAS login ID, and accounts TRDAS83 and TROS107
+    initialize-enabled: ${TRADING_ACCOUNTS_INITIALIZE_ENABLED:true}
   fix:
     enabled: ${FIX_ENABLED:true}
     config-path: ${FIX_CONFIG_PATH:classpath:fix/das-mirror-trading.cfg}
