@@ -46,7 +46,7 @@ public class ExecutionReportProcessor {
             return;
         }
 
-        log.debug("Processing ExecutionReport: ClOrdID={}, ExecType={}, OrdStatus={}, Symbol={}",
+        log.info("Processing ExecutionReport: ClOrdID={}, ExecType={}, OrdStatus={}, Symbol={}",
                 context.getClOrdID(), context.getExecType(), context.getOrdStatus(), context.getSymbol());
 
         // Find ALL matching handlers instead of just the first one
@@ -70,7 +70,7 @@ public class ExecutionReportProcessor {
             final ExecutionReportHandler h = handler;
             executor.execute(() -> {
                 try {
-                    log.debug("Dispatching to {}: ClOrdID={}", 
+                    log.info("Dispatching to {}: ClOrdID={}",
                             handler.getClass().getSimpleName(), ctx.getClOrdID());
                     h.handle(ctx, sessionID);
                 } catch (Exception e) {
