@@ -1,7 +1,10 @@
 package com.longvin.trading.service;
 
+import com.longvin.trading.entities.accounts.Account;
 import com.longvin.trading.entities.orders.LocateRequest;
 import com.longvin.trading.entities.orders.Order;
+import com.longvin.trading.fix.FixSessionRegistry;
+import com.longvin.trading.fixSender.FixMessageSender;
 import com.longvin.trading.repository.LocateRequestRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,15 +15,16 @@ import quickfix.field.*;
 import quickfix.fix42.NewOrderSingle;
 
 import java.math.BigDecimal;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Service for processing short orders with locate requests and stock borrowing.
+ * Service for processing short orders.
  * When a short order is detected for the primary account, this service:
- * 1. Sends a locate request to check stock availability
- * 2. Waits for locate response
- * 3. Borrows the stock if available
- * 4. Places the order for shadow accounts
+ * Directly replicates the order to shadow accounts (stock should already be borrowed).
  */
 @Service
 public class ShortOrderProcessingService {
@@ -34,13 +38,22 @@ public class ShortOrderProcessingService {
     private final LocateRequestRepository locateRequestRepository;
     private final ShortLocateCoordinator shortLocateCoordinator;
     private final ShortOrderPlacementService placementService;
+    private final AccountCacheService accountCacheService;
+    private final FixMessageSender fixMessageSender;
+    private final FixSessionRegistry fixSessionRegistry;
 
     public ShortOrderProcessingService(LocateRequestRepository locateRequestRepository,
                                        ShortLocateCoordinator shortLocateCoordinator,
-                                       ShortOrderPlacementService placementService) {
+                                       ShortOrderPlacementService placementService,
+                                       AccountCacheService accountCacheService,
+                                       FixMessageSender fixMessageSender,
+                                       FixSessionRegistry fixSessionRegistry) {
         this.locateRequestRepository = locateRequestRepository;
         this.shortLocateCoordinator = shortLocateCoordinator;
         this.placementService = placementService;
+        this.accountCacheService = accountCacheService;
+        this.fixMessageSender = fixMessageSender;
+        this.fixSessionRegistry = fixSessionRegistry;
     }
 
     /**
@@ -51,43 +64,91 @@ public class ShortOrderProcessingService {
     }
 
     /**
-     * Process a new short order execution report.
-     * This will trigger the locate request workflow.
+     * Process a short order by directly replicating it to shadow accounts.
+     * Stock should already be borrowed before this is called.
      * 
      * @param order The order entity (primary account order)
-     * @param symbol Symbol to locate
-     * @param quantity Quantity to locate
-     * @param initiatorSessionID Session to send locate request
-     * @return LocateRequest entity created and persisted
+     * @param symbol Symbol to replicate
+     * @param quantity Quantity to replicate
+     * @param initiatorSessionID Session to send orders
      */
     @Transactional
-    public LocateRequest processShortOrder(Order order, String symbol, BigDecimal quantity, SessionID initiatorSessionID) {
-        log.info("Processing short order for symbol={}, quantity={}, orderId={}", 
-            symbol, quantity, order.getId());
+    public void processShortOrder(Order order, String symbol, BigDecimal quantity, SessionID initiatorSessionID) {
+        log.info("Processing short order replication for symbol={}, quantity={}, orderId={}", 
+            symbol, quantity, order != null ? order.getId() : "unknown");
 
-        // Create locate request entity
-        // Generate QuoteReqID (tag 131) - format: LOCATE_SYMBOL_GROUPID
-        String quoteReqId = String.format("LOCATE_%s_%s", symbol, 
-            order.getOrderGroup() != null ? order.getOrderGroup().getId().toString().substring(0, 8) 
-            : UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+        // Get initiator session for sending orders
+        Optional<SessionID> initiatorSessionOpt = fixSessionRegistry.findAnyLoggedOnInitiator();
+        if (initiatorSessionOpt.isEmpty()) {
+            log.warn("No logged-on initiator session found, cannot replicate short order to shadow accounts");
+            return;
+        }
+        SessionID sessionID = initiatorSessionOpt.get();
+
+        // Get shadow accounts
+        List<Account> shadowAccounts = accountCacheService.findActiveShadowAccounts();
+        if (shadowAccounts.isEmpty()) {
+            log.warn("No shadow accounts found, cannot replicate short order");
+            return;
+        }
+
+        // Send orders to each shadow account
+        for (Account shadowAccount : shadowAccounts) {
+            try {
+                sendShortOrderToShadowAccount(order, symbol, quantity, shadowAccount, sessionID);
+            } catch (Exception e) {
+                log.error("Error replicating short order to shadow account {}: {}", 
+                        shadowAccount.getAccountNumber(), e.getMessage(), e);
+            }
+        }
+    }
+
+    /**
+     * Send short order to a shadow account.
+     */
+    private void sendShortOrderToShadowAccount(Order primaryOrder, String symbol, BigDecimal quantity,
+                                              Account shadowAccount, SessionID initiatorSessionID) throws SessionNotFound {
+        String shadowAccountNumber = shadowAccount.getAccountNumber();
+        String clOrdId = generateShadowClOrdId(primaryOrder, shadowAccountNumber);
+
+        // Build order parameters
+        Map<String, Object> orderParams = new HashMap<>();
+        orderParams.put("clOrdID", clOrdId);
+        orderParams.put("side", primaryOrder.getSide() != null ? primaryOrder.getSide() : SIDE_SELL_SHORT);
+        orderParams.put("symbol", symbol);
+        orderParams.put("orderQty", quantity.intValue());
+        orderParams.put("account", shadowAccountNumber);
+
+        // Set order type (default to MARKET if not available)
+        char ordType = primaryOrder.getOrdType() != null ? primaryOrder.getOrdType() : '1'; // MARKET
+        orderParams.put("ordType", ordType);
+
+        // Set time in force (default to DAY if not available)
+        char timeInForce = primaryOrder.getTimeInForce() != null ? primaryOrder.getTimeInForce() : '0'; // DAY
+        orderParams.put("timeInForce", timeInForce);
+
+        // Set price if it's a limit order
+        if (primaryOrder.getPrice() != null && (ordType == '2' || ordType == '4')) { // LIMIT or STOP_LIMIT
+            orderParams.put("price", primaryOrder.getPrice().doubleValue());
+        }
+
+        // Send order
+        fixMessageSender.sendNewOrderSingle(initiatorSessionID, orderParams);
+
+        log.info("Replicated short order to shadow account {}: ClOrdID={}, Symbol={}, Side={}, Qty={}",
+                shadowAccountNumber, clOrdId, symbol, primaryOrder.getSide(), quantity);
+    }
+
+    /**
+     * Generate ClOrdID for shadow order.
+     */
+    private String generateShadowClOrdId(Order primaryOrder, String shadowAccountNumber) {
+        String primaryClOrdId = primaryOrder.getFixClOrdId() != null 
+            ? primaryOrder.getFixClOrdId() 
+            : (primaryOrder.getFixOrderId() != null ? primaryOrder.getFixOrderId() : "UNKNOWN");
         
-        LocateRequest locateRequest = LocateRequest.builder()
-            .order(order)
-            .orderGroup(order.getOrderGroup() != null ? order.getOrderGroup() : null)
-            .account(order.getAccount())
-            .symbol(symbol)
-            .quantity(quantity)
-            .status(LocateRequest.LocateStatus.PENDING)
-            .fixQuoteReqId(quoteReqId)
-            .build();
-
-        // Persist locate request
-        locateRequest = locateRequestRepository.save(locateRequest);
-
-        // Send locate request via FIX
-        sendLocateRequest(locateRequest, initiatorSessionID);
-
-        return locateRequest;
+        // Simple format: prefix + shadow account + original ClOrdID
+        return "COPY-" + shadowAccountNumber + "-" + primaryClOrdId;
     }
 
     /**

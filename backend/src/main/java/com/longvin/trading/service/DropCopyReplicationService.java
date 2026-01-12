@@ -193,10 +193,10 @@ public class DropCopyReplicationService {
             return;
         }
         
-        log.info("Processing short order locate request: OrderId={}, Symbol={}, Qty={}", 
+        log.info("Processing short order replication: OrderId={}, Symbol={}, Qty={}", 
             orderId, state.symbol, state.orderQty);
         
-        // Process short order with locate request
+        // Process short order by replicating to shadow accounts (stock should already be borrowed)
         try {
             shortOrderProcessingService.processShortOrder(
                 order,
@@ -204,7 +204,7 @@ public class DropCopyReplicationService {
                 state.orderQty,
                 initiatorSessionID
             );
-            log.info("Locate request sent for short order: OrderId={}, Symbol={}, Qty={}", 
+            log.info("Short order replicated to shadow accounts: OrderId={}, Symbol={}, Qty={}", 
                 orderId, state.symbol, state.orderQty);
         } catch (Exception e) {
             log.error("Error processing short order locate request for orderId={}", orderId, e);
