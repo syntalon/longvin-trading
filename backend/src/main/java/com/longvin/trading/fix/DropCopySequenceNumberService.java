@@ -78,32 +78,35 @@ public class DropCopySequenceNumberService {
     }
 
     /**
-     * Check if sequence numbers should be reset based on mismatch detection.
-     * Resets to 1 if:
-     * - DAS Trader is sending sequence number 1 (they're starting fresh)
-     * - There's a large mismatch (difference > threshold)
+     * Check if sequence numbers should be reset based on what DAS Trader is sending.
+     * For an acceptor session, we should sync to whatever sequence number DAS Trader sends.
+     * Only reset to 1 if DAS Trader is explicitly sending 1 (they're starting fresh).
+     * 
+     * Best practice: Always sync to the initiator's sequence number, don't reset on large mismatches.
+     * The daily reset at midnight handles the start-of-day reset requirement.
      * 
      * @param sessionID The drop copy session ID
      * @param incomingSeqNum The sequence number DAS Trader is sending
      * @param expectedSeqNum Our expected sequence number
-     * @return true if sequence numbers were reset, false otherwise
+     * @return true if sequence numbers were reset to 1, false if we should sync instead
      */
-    public boolean resetSequenceNumbersIfMismatch(SessionID sessionID, int incomingSeqNum, int expectedSeqNum) {
-        // If DAS Trader is sending sequence number 1, they're starting fresh - reset to 1
+    public boolean shouldResetTo1OnLogon(SessionID sessionID, int incomingSeqNum, int expectedSeqNum) {
+        // Only reset to 1 if DAS Trader is explicitly sending sequence number 1
+        // This indicates they're starting fresh (e.g., after a daily reset)
         if (incomingSeqNum == 1) {
             log.info("DAS Trader is sending sequence number 1 - resetting our sequence numbers to 1 to match (expected was {})", 
                 expectedSeqNum);
-            return resetSequenceNumbers(sessionID);
+            return true;
         }
         
-        // If there's a large mismatch (difference > 100), reset to 1
-        // This handles cases where sequence numbers got out of sync
-        int mismatch = Math.abs(incomingSeqNum - expectedSeqNum);
-        if (mismatch > 100) {
-            log.warn("Large sequence number mismatch detected: incoming={}, expected={}, difference={}. " +
-                "Resetting sequence numbers to 1 per DAS Trader requirement.", 
-                incomingSeqNum, expectedSeqNum, mismatch);
-            return resetSequenceNumbers(sessionID);
+        // For any other sequence number, we should SYNC to it, not reset
+        // Even if there's a large mismatch, DAS Trader knows what sequence number they're at,
+        // and we should accept it. The daily reset at midnight handles the start-of-day requirement.
+        if (incomingSeqNum != expectedSeqNum) {
+            log.info("DAS Trader is sending sequence number {} (we expected {}). " +
+                "Will sync to DAS Trader's sequence number instead of resetting. " +
+                "Daily reset at midnight handles the start-of-day requirement.", 
+                incomingSeqNum, expectedSeqNum);
         }
         
         return false;

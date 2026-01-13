@@ -166,28 +166,32 @@ public class DropCopyApplication extends MessageCracker implements Application {
                     log.debug("Could not process SequenceReset message: {}", e.getMessage());
                 }
             } else if ("A".equals(msgType)) {
-                // Logon message: check for mismatch and reset to 1 if needed, otherwise synchronize
+                // Logon message: sync to DAS Trader's sequence number (they're the initiator)
+                // Only reset to 1 if DAS Trader is explicitly sending 1
                 int incomingSeqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
                 try {
                     Session session = Session.lookupSession(sessionID);
                     if (session != null) {
                         int expectedSeqNum = session.getExpectedTargetNum();
                         
-                        // Check if we should reset to 1 based on mismatch (e.g., DAS Trader sending 1 or large mismatch)
-                        boolean wasReset = sequenceNumberService.resetSequenceNumbersIfMismatch(
+                        // Check if DAS Trader is sending 1 (they're starting fresh)
+                        boolean shouldReset = sequenceNumberService.shouldResetTo1OnLogon(
                             sessionID, incomingSeqNum, expectedSeqNum);
                         
-                        if (wasReset) {
-                            log.info("Sequence numbers reset to 1 due to mismatch detection on logon");
+                        if (shouldReset) {
+                            // DAS Trader is sending 1 - reset to 1 to match
+                            sequenceNumberService.resetSequenceNumbers(sessionID);
+                            log.info("Sequence numbers reset to 1 because DAS Trader sent sequence number 1");
                         } else if (incomingSeqNum != expectedSeqNum) {
-                            // Small mismatch - synchronize to DAS Trader's sequence number
-                            log.info("Synchronizing target sequence numbers: incoming={}, expected={}. Setting expected sequence number to match DAS Trader.", 
+                            // DAS Trader is sending a different sequence number - sync to it
+                            // This is the correct behavior for an acceptor session
+                            log.info("Synchronizing to DAS Trader's sequence number: incoming={}, expected={}. " +
+                                "Setting both target and sender sequence numbers to match DAS Trader.", 
                                 incomingSeqNum, expectedSeqNum);
                             session.setNextTargetMsgSeqNum(incomingSeqNum);
                             
-                            // Also synchronize our sender sequence number
-                            log.info("Setting our sender sequence number to match DAS Trader's sender sequence number: {}. " +
-                                "This will be used in the Logon response and persisted in FileStore.", incomingSeqNum);
+                            // Sync our sender sequence number to match what DAS Trader expects
+                            // This ensures our Logon response has the correct sequence number
                             session.setNextSenderMsgSeqNum(incomingSeqNum);
                         } else {
                             log.debug("Sequence numbers already in sync: incoming={}, expected={}", incomingSeqNum, expectedSeqNum);
