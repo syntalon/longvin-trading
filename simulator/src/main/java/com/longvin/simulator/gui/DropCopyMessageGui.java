@@ -229,8 +229,8 @@ public class DropCopyMessageGui implements CommandLineRunner {
         // QuoteReqID (for short locate)
         addLabelAndField(formPanel, gbc, row++, "QuoteReqID:", quoteReqIdField = new JTextField(30));
         
-        // ExDestination (tag 30)
-        addLabelAndField(formPanel, gbc, row++, "ExDestination:", exDestinationField = new JTextField(30));
+        // LastMkt (tag 30) - route/market field for ExecutionReport
+        addLabelAndField(formPanel, gbc, row++, "LastMkt (Route):", exDestinationField = new JTextField(30));
         
         // Text
         addLabelAndField(formPanel, gbc, row++, "Text:", textField = new JTextField(30));
@@ -437,7 +437,7 @@ public class DropCopyMessageGui implements CommandLineRunner {
         timeInForceCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.TimeInForce.DAY);
         accountField.setText("PRIMARY_ACCOUNT");
         quoteReqIdField.setText("");
-        exDestinationField.setText(""); // ExDestination not valid in ExecutionReport messages
+        exDestinationField.setText("ARCA"); // Tag 30 (LastMkt) - route/market
         textField.setText("");
         appendStatus("Short Sell Filled sample data filled.");
     }
@@ -461,7 +461,7 @@ public class DropCopyMessageGui implements CommandLineRunner {
         timeInForceCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.TimeInForce.DAY);
         accountField.setText("PRIMARY_ACCOUNT");
         quoteReqIdField.setText("");
-        exDestinationField.setText(""); // ExDestination not valid in ExecutionReport messages
+        exDestinationField.setText("ARCA"); // Tag 30 (LastMkt) - route/market
         textField.setText("");
         appendStatus("Long Buy Filled sample data filled.");
     }
@@ -489,7 +489,7 @@ public class DropCopyMessageGui implements CommandLineRunner {
         avgPxField.setText("0.01");
         timeInForceCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.TimeInForce.DAY);
         accountField.setText("PRIMARY_ACCOUNT");
-        exDestinationField.setText(""); // ExDestination not valid in ExecutionReport messages
+        exDestinationField.setText("TESTSL"); // Tag 30 (LastMkt) - locate route
         textField.setText("");
         appendStatus("Short Locate Filled sample data filled (Side=BUY, ExecType=FILLED, OrdStatus=FILLED).");
     }

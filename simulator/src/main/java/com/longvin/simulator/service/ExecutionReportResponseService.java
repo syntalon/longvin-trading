@@ -227,8 +227,9 @@ public class ExecutionReportResponseService {
             if (account != null && !account.isEmpty()) {
                 report.setString(Account.FIELD, account);
             }
-            // ExDestination is optional - only set if needed (was causing validation issues)
-            // report.setString(ExDestination.FIELD, "ARCA");
+            // Set LastMkt (tag 30) - valid in ExecutionReport messages
+            // Tag 30 represents the market/route where the execution occurred
+            report.setString(30, "ARCA"); // Tag 30 = LastMkt in ExecutionReport
             report.set(new TransactTime());
 
             session.send(report);
@@ -275,8 +276,9 @@ public class ExecutionReportResponseService {
             if (account != null && !account.isEmpty()) {
                 report.setString(Account.FIELD, account);
             }
-            // ExDestination is optional - only set if needed (was causing validation issues)
-            // report.setString(ExDestination.FIELD, "ARCA");
+            // Set LastMkt (tag 30) - valid in ExecutionReport messages
+            // Tag 30 represents the market/route where the execution occurred
+            report.setString(30, "ARCA"); // Tag 30 = LastMkt in ExecutionReport
             report.set(new TransactTime());
 
             session.send(report);
@@ -338,8 +340,9 @@ public class ExecutionReportResponseService {
             if (account != null && !account.isEmpty()) {
                 report.setString(Account.FIELD, account);
             }
-            // ExDestination is optional - set to locate route if needed
-            // report.setString(ExDestination.FIELD, "TESTSL");
+            // Set LastMkt (tag 30) - valid in ExecutionReport messages
+            // For locate orders, use TESTSL as the route
+            report.setString(30, "TESTSL"); // Tag 30 = LastMkt in ExecutionReport
             report.set(new TransactTime());
 
             session.send(report);

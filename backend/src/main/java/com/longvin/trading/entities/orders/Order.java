@@ -113,6 +113,12 @@ public class Order {
     private BigDecimal stopPx;
 
     /**
+     * Route (ExDestination) used for this order.
+     */
+    @Column(name = "ex_destination", length = 50)
+    private String exDestination;
+
+    /**
      * Current execution type (from last ExecutionReport).
      * Values: NEW, PARTIAL_FILL, FILL, DONE_FOR_DAY, CANCELED, REPLACED, etc.
      */

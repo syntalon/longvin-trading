@@ -159,8 +159,14 @@ public class ExecutionReportContext {
             this.account = message.getString(Account.FIELD);
         }
 
+        // Capture ExDestination (route)
+        // In FIX 4.2, ExDestination is tag 30; in FIX 4.3+, it's tag 100
+        // QuickFIX/J's ExDestination.FIELD should handle this, but we also check tag 30 explicitly for FIX 4.2
         if (message.isSetField(ExDestination.FIELD)) {
             this.exDestination = message.getString(ExDestination.FIELD);
+        } else if (message.isSetField(30)) {
+            // Explicit check for tag 30 (ExDestination in FIX 4.2)
+            this.exDestination = message.getString(30);
         }
 
         // Derived flags

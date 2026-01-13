@@ -82,8 +82,27 @@ public class RejectedOrderHandler implements ExecutionReportHandler {
         log.info("Handling route-related rejection. ClOrdID={}, Reason={}",
                 context.getClOrdID(), context.getText());
 
+        // Validate required fields before proceeding
+        if (context.getSymbol() == null || context.getSymbol().isBlank()) {
+            log.error("Cannot retry order: Symbol is missing. ClOrdID={}", context.getClOrdID());
+            handlePermanentRejection(context);
+            return;
+        }
+
+        if (context.getSide() == 0) {
+            log.error("Cannot retry order: Side is missing. ClOrdID={}", context.getClOrdID());
+            handlePermanentRejection(context);
+            return;
+        }
+
+        if (context.getAccount() == null || context.getAccount().isBlank()) {
+            log.error("Cannot retry order: Account is missing. ClOrdID={}", context.getClOrdID());
+            handlePermanentRejection(context);
+            return;
+        }
+
         String alternativeRoute = locateRouteService.getAvailableLocateRoute(context.getSymbol());
-        if (alternativeRoute == null) {
+        if (alternativeRoute == null || alternativeRoute.isBlank()) {
             log.warn("No alternative route available for symbol: {}", context.getSymbol());
             handlePermanentRejection(context);
             return;
@@ -97,19 +116,37 @@ public class RejectedOrderHandler implements ExecutionReportHandler {
         orderParams.put("clOrdID", newClOrdID);
         orderParams.put("symbol", context.getSymbol());
         orderParams.put("side", context.getSide());
-        orderParams.put("orderQty", context.getOrderQty() != null ? context.getOrderQty().intValue() : 0);
+        orderParams.put("orderQty", context.getOrderQty() != null && context.getOrderQty().intValue() > 0 
+                ? context.getOrderQty().intValue() : 1); // Default to 1 if missing
         orderParams.put("ordType", '2'); // LIMIT
-        if (context.getAvgPx() != null) {
+        if (context.getAvgPx() != null && context.getAvgPx().doubleValue() > 0) {
             orderParams.put("price", context.getAvgPx().doubleValue());
+        } else {
+            // For LIMIT orders, we need a price. Use lastPx if available, otherwise log error
+            if (context.getLastPx() != null && context.getLastPx().doubleValue() > 0) {
+                orderParams.put("price", context.getLastPx().doubleValue());
+                log.warn("Using LastPx as price for retry order. ClOrdID={}, Price={}", 
+                        newClOrdID, context.getLastPx());
+            } else {
+                log.error("Cannot retry LIMIT order: No price available (AvgPx or LastPx). ClOrdID={}", 
+                        context.getClOrdID());
+                handlePermanentRejection(context);
+                return;
+            }
         }
         orderParams.put("timeInForce", '0'); // DAY
         orderParams.put("account", context.getAccount());
         orderParams.put("exDestination", alternativeRoute);
 
-        fixMessageSender.sendNewOrderSingle(sessionID, orderParams);
-
-        log.info("Retrying order with alternative route. Original ClOrdID={}, New ClOrdID={}, Route={}",
-                context.getClOrdID(), newClOrdID, alternativeRoute);
+        try {
+            fixMessageSender.sendNewOrderSingle(sessionID, orderParams);
+            log.info("Retrying order with alternative route. Original ClOrdID={}, New ClOrdID={}, Route={}",
+                    context.getClOrdID(), newClOrdID, alternativeRoute);
+        } catch (Exception e) {
+            log.error("Failed to retry order with alternative route. ClOrdID={}, Route={}, Error={}", 
+                    context.getClOrdID(), alternativeRoute, e.getMessage(), e);
+            handlePermanentRejection(context);
+        }
     }
 
     /**

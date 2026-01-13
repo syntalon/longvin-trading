@@ -138,21 +138,37 @@ public class FillOrderHandler implements ExecutionReportHandler {
 
     /**
      * Try to find the order from database by OrderID or ClOrdID.
+     * Also updates the order with ExDestination if available in the context.
      */
     private Order findOrderFromContext(ExecutionReportContext context) {
+        Order order = null;
         if (context.getOrderID() != null) {
             Optional<Order> orderOpt = orderRepository.findByFixOrderId(context.getOrderID());
             if (orderOpt.isPresent()) {
-                return orderOpt.get();
+                order = orderOpt.get();
             }
         }
-        if (context.getClOrdID() != null) {
+        if (order == null && context.getClOrdID() != null) {
             Optional<Order> orderOpt = orderRepository.findByFixClOrdId(context.getClOrdID());
             if (orderOpt.isPresent()) {
-                return orderOpt.get();
+                order = orderOpt.get();
             }
         }
-        return null;
+        
+        // Update ExDestination in the order if available in context and not already set
+        if (order != null && context.getExDestination() != null && !context.getExDestination().isBlank()) {
+            if (order.getExDestination() == null || order.getExDestination().isBlank()) {
+                order.setExDestination(context.getExDestination());
+                orderRepository.save(order);
+                log.info("Stored ExDestination in Order entity: ClOrdID={}, ExDestination={}", 
+                        context.getClOrdID(), context.getExDestination());
+            }
+        } else if (order != null && (context.getExDestination() == null || context.getExDestination().isBlank())) {
+            log.debug("ExecutionReport does not include ExDestination for ClOrdID={}, will use stored value if available", 
+                    context.getClOrdID());
+        }
+        
+        return order;
     }
 
     /**
@@ -174,6 +190,11 @@ public class FillOrderHandler implements ExecutionReportHandler {
             } else {
                 log.warn("Account not found for order: {}", context.getAccount());
             }
+        }
+
+        // Store ExDestination if available
+        if (context.getExDestination() != null && !context.getExDestination().isBlank()) {
+            order.setExDestination(context.getExDestination());
         }
 
         return order;
@@ -341,9 +362,25 @@ public class FillOrderHandler implements ExecutionReportHandler {
         }
 
         // Use the same route (exDestination) as the primary account order
+        // Priority: 1) ExecutionReport (most current), 2) Order entity (stored from previous ExecutionReport)
         String route = null;
         if (context.getExDestination() != null && !context.getExDestination().isBlank()) {
+            // Route is available in current ExecutionReport - use it directly
             route = context.getExDestination();
+            log.info("Using ExDestination from ExecutionReport: ClOrdID={}, Route={}",
+                    context.getClOrdID(), route);
+        } else if (primaryOrder != null && primaryOrder.getExDestination() != null && !primaryOrder.getExDestination().isBlank()) {
+            // Fallback: Use route stored in Order entity (from previous ExecutionReport)
+            route = primaryOrder.getExDestination();
+            log.debug("Using ExDestination from Order entity (fallback): ClOrdID={}, Route={}", 
+                    context.getClOrdID(), route);
+        } else {
+            log.warn("No ExDestination available for copy order. ClOrdID={}, PrimaryOrderClOrdID={}, Symbol={}. " +
+                    "Copy order will be sent without route, which may cause rejection.",
+                    clOrdId, context.getClOrdID(), context.getSymbol());
+        }
+        
+        if (route != null) {
             orderParams.put("exDestination", route);
         }
 

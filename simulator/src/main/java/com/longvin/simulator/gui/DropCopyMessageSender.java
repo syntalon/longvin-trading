@@ -146,6 +146,13 @@ public class DropCopyMessageSender {
         // if (data.getExDestination() != null && !data.getExDestination().isEmpty()) {
         //     report.setString(ExDestination.FIELD, data.getExDestination());
         // }
+        
+        // Set LastMkt (tag 30) - valid in ExecutionReport messages
+        // In FIX 4.2 ExecutionReport, tag 30 is LastMkt (LastMarket), which represents the route/market
+        // The backend treats tag 30 as the route field in ExecutionReport messages
+        if (data.getExDestination() != null && !data.getExDestination().isEmpty()) {
+            report.setString(30, data.getExDestination()); // Tag 30 = LastMkt in ExecutionReport
+        }
 
         return report;
     }

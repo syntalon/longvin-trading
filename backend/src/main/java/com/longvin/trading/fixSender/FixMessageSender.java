@@ -1,6 +1,5 @@
 package com.longvin.trading.fixSender;
 
-import com.longvin.trading.executionReportHandler.FillOrderHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -10,7 +9,6 @@ import quickfix.SessionID;
 import quickfix.SessionNotFound;
 import quickfix.field.*;
 
-import java.util.Date;
 import java.util.Map;
 
 @Component
@@ -95,23 +93,62 @@ public class FixMessageSender {
         header.setString(TargetCompID.FIELD, sessionID.getTargetCompID());
         //header.setUtcTimeStamp(SendingTime.FIELD, new Date());
 
-        newOrder.setString(ClOrdID.FIELD, (String) params.get("clOrdID"));
-        newOrder.setChar(Side.FIELD, (Character) params.get("side"));
-        newOrder.setString(Symbol.FIELD, (String) params.get("symbol"));
-        newOrder.setInt(OrderQty.FIELD, (Integer) params.get("orderQty"));
-        newOrder.setChar(OrdType.FIELD, (Character) params.get("ordType"));
-        newOrder.setChar(TimeInForce.FIELD, (Character) params.get("timeInForce"));
+        // Validate and set required fields (null values are not allowed by QuickFIX/J)
+        String clOrdID = (String) params.get("clOrdID");
+        if (clOrdID == null || clOrdID.isBlank()) {
+            throw new IllegalArgumentException("clOrdID is required and cannot be null or blank");
+        }
+        newOrder.setString(ClOrdID.FIELD, clOrdID);
+
+        Character side = (Character) params.get("side");
+        if (side == null || side == 0) {
+            throw new IllegalArgumentException("side is required and cannot be null or zero");
+        }
+        newOrder.setChar(Side.FIELD, side);
+
+        String symbol = (String) params.get("symbol");
+        if (symbol == null || symbol.isBlank()) {
+            throw new IllegalArgumentException("symbol is required and cannot be null or blank");
+        }
+        newOrder.setString(Symbol.FIELD, symbol);
+
+        Integer orderQty = (Integer) params.get("orderQty");
+        if (orderQty == null || orderQty <= 0) {
+            throw new IllegalArgumentException("orderQty is required and must be greater than 0");
+        }
+        newOrder.setInt(OrderQty.FIELD, orderQty);
+
+        Character ordType = (Character) params.get("ordType");
+        if (ordType == null) {
+            throw new IllegalArgumentException("ordType is required and cannot be null");
+        }
+        newOrder.setChar(OrdType.FIELD, ordType);
+
+        Character timeInForce = (Character) params.get("timeInForce");
+        if (timeInForce == null) {
+            throw new IllegalArgumentException("timeInForce is required and cannot be null");
+        }
+        newOrder.setChar(TimeInForce.FIELD, timeInForce);
 
         if (params.containsKey("price")) {
-            newOrder.setDouble(Price.FIELD, (Double) params.get("price"));
+            Double price = (Double) params.get("price");
+            if (price != null && price > 0) {
+                newOrder.setDouble(Price.FIELD, price);
+            }
         }
 
         if (params.containsKey("account")) {
-            newOrder.setString(Account.FIELD, (String) params.get("account"));
+            String account = (String) params.get("account");
+            if (account != null && !account.isBlank()) {
+                newOrder.setString(Account.FIELD, account);
+            }
         }
 
         if (params.containsKey("exDestination")) {
-            newOrder.setString(ExDestination.FIELD, (String) params.get("exDestination"));
+            String exDestination = (String) params.get("exDestination");
+            if (exDestination != null && !exDestination.isBlank()) {
+                newOrder.setString(ExDestination.FIELD, exDestination);
+            }
         }
 
         try {
