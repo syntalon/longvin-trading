@@ -22,6 +22,7 @@ public class DropCopyApplication extends MessageCracker implements Application {
     
     private final FixSessionRegistry sessionRegistry;
     private final ExecutionReportProcessor executionReportProcessor;
+    private final DropCopySequenceNumberService sequenceNumberService;
     
     // Track recent messages from drop copy session (last 100 messages)
     private final BlockingQueue<ReceivedMessage> recentDropCopyMessages = 
@@ -33,27 +34,35 @@ public class DropCopyApplication extends MessageCracker implements Application {
     private volatile long firstAppMessageTime = 0;
 
     public DropCopyApplication(FixSessionRegistry sessionRegistry,
-                               ExecutionReportProcessor executionReportProcessor) {
+                               ExecutionReportProcessor executionReportProcessor,
+                               DropCopySequenceNumberService sequenceNumberService) {
         this.sessionRegistry = sessionRegistry;
         this.executionReportProcessor = executionReportProcessor;
+        this.sequenceNumberService = sequenceNumberService;
     }
 
     @Override
     public void onCreate(SessionID sessionID) {
         log.info("Created drop-copy acceptor session {}", sessionID);
         
+        // Reset sequence numbers to 1 if it's a new day (per DAS Trader requirement)
+        sequenceNumberService.resetSequenceNumbersIfNewDay(sessionID);
+        
         // Set target sequence number to 1 initially to accept any incoming sequence number >= 1 from DAS Trader
         // The actual value will be synchronized in fromAdmin when Logon is received
-        // Sender sequence number is managed by FileStore (persists across restarts)
+        // Sender sequence number is reset to 1 at start of each day per DAS Trader requirement
         try {
             Session session = Session.lookupSession(sessionID);
             if (session != null) {
                 session.setNextTargetMsgSeqNum(1);
-                log.info("Drop copy acceptor session created {} - set targetSeqNum=1 initially to accept any incoming sequence number. " +
-                    "Will synchronize to actual value in fromAdmin. Sender sequence number managed by FileStore.", sessionID);
+                // Ensure sender sequence number is also 1 (may have been reset by sequenceNumberService)
+                session.setNextSenderMsgSeqNum(1);
+                log.info("Drop copy acceptor session created {} - set targetSeqNum=1 and senderSeqNum=1. " +
+                    "Sequence numbers reset to 1 at start of each day per DAS Trader requirement. " +
+                    "Will synchronize target sequence number in fromAdmin when Logon is received.", sessionID);
             }
         } catch (Exception e) {
-            log.debug("Could not set target sequence number for drop copy acceptor session {}: {}", sessionID, e.getMessage());
+            log.debug("Could not set sequence numbers for drop copy acceptor session {}: {}", sessionID, e.getMessage());
         }
     }
 
@@ -62,15 +71,23 @@ public class DropCopyApplication extends MessageCracker implements Application {
         sessionRegistry.register("acceptor", sessionID);
         log.info("Logged on to drop-copy session {}", sessionID);
         
-        // Log sequence number after logon
+        // Reset sequence numbers to 1 if it's a new day (per DAS Trader requirement)
+        // This ensures sequence numbers are reset at the start of each day's session
+        boolean wasReset = sequenceNumberService.resetSequenceNumbersIfNewDay(sessionID);
+        if (wasReset) {
+            log.info("Drop copy session logged on - sequence numbers reset to 1 for new day");
+        }
+        
+        // Log sequence numbers after logon
         try {
             Session session = Session.lookupSession(sessionID);
             if (session != null) {
                 int expectedSeqNum = session.getExpectedTargetNum();
-                log.info("Drop copy session logged on - current expected sequence number: {}", expectedSeqNum);
+                log.info("Drop copy session logged on - expected target sequence number: {} (sender sequence number reset to 1 per DAS Trader requirement)", 
+                    expectedSeqNum);
             }
         } catch (Exception e) {
-            log.debug("Could not check sequence number after logon for drop copy session {}: {}", sessionID, e.getMessage());
+            log.warn("Could not check sequence numbers after logon for drop copy session {}: {}", sessionID, e.getMessage());
         }
     }
 
@@ -125,27 +142,59 @@ public class DropCopyApplication extends MessageCracker implements Application {
         try {
             String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
             
-            if ("A".equals(msgType)) {
-                // Logon message: synchronize both target and sender sequence numbers
+            // Handle SequenceReset messages (MsgType=4) - DAS Trader may send this to reset sequence numbers
+            if ("4".equals(msgType)) {
+                try {
+                    Session session = Session.lookupSession(sessionID);
+                    if (session != null) {
+                        // Check if this is a sequence reset request
+                        if (message.isSetField(quickfix.field.GapFillFlag.FIELD)) {
+                            boolean gapFill = message.getBoolean(quickfix.field.GapFillFlag.FIELD);
+                            int newSeqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
+                            
+                            if (!gapFill) {
+                                // Not a gap fill - this is a sequence reset request
+                                log.info("Received SequenceReset message from DAS Trader (newSeqNum={}, gapFill=false). " +
+                                    "Resetting sequence numbers to 1 per DAS Trader requirement.", newSeqNum);
+                                sequenceNumberService.resetSequenceNumbers(sessionID);
+                            } else {
+                                log.debug("Received SequenceReset gap fill message (newSeqNum={})", newSeqNum);
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    log.debug("Could not process SequenceReset message: {}", e.getMessage());
+                }
+            } else if ("A".equals(msgType)) {
+                // Logon message: check for mismatch and reset to 1 if needed, otherwise synchronize
                 int incomingSeqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
                 try {
                     Session session = Session.lookupSession(sessionID);
                     if (session != null) {
                         int expectedSeqNum = session.getExpectedTargetNum();
-                        // Always synchronize to DAS Trader's sequence number for Logon messages
-                        if (incomingSeqNum != expectedSeqNum) {
+                        
+                        // Check if we should reset to 1 based on mismatch (e.g., DAS Trader sending 1 or large mismatch)
+                        boolean wasReset = sequenceNumberService.resetSequenceNumbersIfMismatch(
+                            sessionID, incomingSeqNum, expectedSeqNum);
+                        
+                        if (wasReset) {
+                            log.info("Sequence numbers reset to 1 due to mismatch detection on logon");
+                        } else if (incomingSeqNum != expectedSeqNum) {
+                            // Small mismatch - synchronize to DAS Trader's sequence number
                             log.info("Synchronizing target sequence numbers: incoming={}, expected={}. Setting expected sequence number to match DAS Trader.", 
                                 incomingSeqNum, expectedSeqNum);
                             session.setNextTargetMsgSeqNum(incomingSeqNum);
+                            
+                            // Also synchronize our sender sequence number
+                            log.info("Setting our sender sequence number to match DAS Trader's sender sequence number: {}. " +
+                                "This will be used in the Logon response and persisted in FileStore.", incomingSeqNum);
+                            session.setNextSenderMsgSeqNum(incomingSeqNum);
+                        } else {
+                            log.debug("Sequence numbers already in sync: incoming={}, expected={}", incomingSeqNum, expectedSeqNum);
                         }
-                        
-                        // Synchronize our sender sequence number to match DAS Trader's sender sequence number
-                        log.info("Setting our sender sequence number to match DAS Trader's sender sequence number: {}. " +
-                            "This will be used in the Logon response and persisted in FileStore.", incomingSeqNum);
-                        session.setNextSenderMsgSeqNum(incomingSeqNum);
                     }
                 } catch (Exception e) {
-                    log.debug("Could not adjust sequence numbers for drop copy acceptor session: {}", e.getMessage());
+                    log.warn("Could not adjust sequence numbers for drop copy acceptor session: {}", e.getMessage());
                 }
             } else if ("5".equals(msgType)) {
                 // Logout message: check if DAS Trader is telling us what sequence number they expect
@@ -171,11 +220,11 @@ public class DropCopyApplication extends MessageCracker implements Application {
                         }
                     }
                 } catch (Exception e) {
-                    log.debug("Could not process Logout message for sequence number info: {}", e.getMessage());
+                    log.warn("Could not process Logout message for sequence number info: {}", e.getMessage());
                 }
             }
         } catch (Exception e) {
-            log.debug("Error processing fromAdmin for drop-copy session {}: {}", sessionID, e.getMessage());
+            log.warn("Error processing fromAdmin for drop-copy session {}: {}", sessionID, e.getMessage());
         }
     }
 
@@ -243,7 +292,7 @@ public class DropCopyApplication extends MessageCracker implements Application {
                 String targetCompId = message.getHeader().getString(quickfix.field.TargetCompID.FIELD);
                 log.info("Received heartbeat from DAS Trader ({} -> {}, seqNum={})", senderCompId, targetCompId, seqNum);
             } catch (Exception e) {
-                log.trace("Could not log incoming heartbeat: {}", e.getMessage());
+                log.warn("Could not log incoming heartbeat: {}", e.getMessage());
             }
             // Heartbeats are handled automatically by QuickFIX/J
             return;
