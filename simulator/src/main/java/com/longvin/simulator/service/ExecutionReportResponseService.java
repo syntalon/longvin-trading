@@ -190,5 +190,164 @@ public class ExecutionReportResponseService {
             log.error("Error sending Replace ExecutionReport: {}", e.getMessage(), e);
         }
     }
+
+    /**
+     * Send a filled ExecutionReport for a short sell order.
+     * Side=SELL_SHORT (5), ExecType=FILL (2), OrdStatus=FILLED (2)
+     */
+    public void sendShortSellFilledExecutionReport(SessionID sessionID, String clOrdId, String symbol, 
+                                                     double orderQty, double price, String account) {
+        try {
+            Session session = Session.lookupSession(sessionID);
+            if (session == null || !session.isLoggedOn()) {
+                log.warn("Cannot send Short Sell Filled ExecutionReport: session {} is not logged on", sessionID);
+                return;
+            }
+
+            ExecutionReport report = new ExecutionReport(
+                new OrderID("SIM-SHORT-" + System.currentTimeMillis()),
+                new ExecID("EXEC-SHORT-" + System.currentTimeMillis()),
+                new ExecTransType(ExecTransType.NEW),
+                new ExecType(ExecType.FILL),
+                new OrdStatus(OrdStatus.FILLED),
+                new Symbol(symbol),
+                new Side(Side.SELL_SHORT),
+                new LeavesQty(0.0),
+                new CumQty(orderQty),
+                new AvgPx(price)
+            );
+
+            if (clOrdId != null && !clOrdId.isEmpty()) {
+                report.setString(ClOrdID.FIELD, clOrdId);
+            }
+            report.setString(Symbol.FIELD, symbol);
+            report.set(new OrderQty(orderQty));
+            report.set(new LastPx(price));
+            report.set(new LastShares(orderQty));
+            if (account != null && !account.isEmpty()) {
+                report.setString(Account.FIELD, account);
+            }
+            // ExDestination is optional - only set if needed (was causing validation issues)
+            // report.setString(ExDestination.FIELD, "ARCA");
+            report.set(new TransactTime());
+
+            session.send(report);
+            log.info("Simulator sent Short Sell Filled ExecutionReport (session: {}): OrderID={}, ClOrdID={}, Symbol={}, Qty={}, Price={}", 
+                sessionID, report.getString(OrderID.FIELD), clOrdId, symbol, orderQty, price);
+        } catch (Exception e) {
+            log.error("Error sending Short Sell Filled ExecutionReport: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Send a filled ExecutionReport for a long buy order.
+     * Side=BUY (1), ExecType=FILL (2), OrdStatus=FILLED (2)
+     */
+    public void sendLongBuyFilledExecutionReport(SessionID sessionID, String clOrdId, String symbol, 
+                                                  double orderQty, double price, String account) {
+        try {
+            Session session = Session.lookupSession(sessionID);
+            if (session == null || !session.isLoggedOn()) {
+                log.warn("Cannot send Long Buy Filled ExecutionReport: session {} is not logged on", sessionID);
+                return;
+            }
+
+            ExecutionReport report = new ExecutionReport(
+                new OrderID("SIM-LONG-" + System.currentTimeMillis()),
+                new ExecID("EXEC-LONG-" + System.currentTimeMillis()),
+                new ExecTransType(ExecTransType.NEW),
+                new ExecType(ExecType.FILL),
+                new OrdStatus(OrdStatus.FILLED),
+                new Symbol(symbol),
+                new Side(Side.BUY),
+                new LeavesQty(0.0),
+                new CumQty(orderQty),
+                new AvgPx(price)
+            );
+
+            if (clOrdId != null && !clOrdId.isEmpty()) {
+                report.setString(ClOrdID.FIELD, clOrdId);
+            }
+            report.setString(Symbol.FIELD, symbol);
+            report.set(new OrderQty(orderQty));
+            report.set(new LastPx(price));
+            report.set(new LastShares(orderQty));
+            if (account != null && !account.isEmpty()) {
+                report.setString(Account.FIELD, account);
+            }
+            // ExDestination is optional - only set if needed (was causing validation issues)
+            // report.setString(ExDestination.FIELD, "ARCA");
+            report.set(new TransactTime());
+
+            session.send(report);
+            log.info("Simulator sent Long Buy Filled ExecutionReport (session: {}): OrderID={}, ClOrdID={}, Symbol={}, Qty={}, Price={}", 
+                sessionID, report.getString(OrderID.FIELD), clOrdId, symbol, orderQty, price);
+        } catch (Exception e) {
+            log.error("Error sending Long Buy Filled ExecutionReport: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Send a filled ExecutionReport for a short locate order.
+     * Based on production logs: Side=BUY (1), ExecType=FILL (2), OrdStatus=FILLED (2)
+     * Short locate orders are BUY orders with ExDestination set to locate route (e.g., TESTSL)
+     * This represents a filled locate execution report, not a new order.
+     */
+    public void sendShortLocateNewOrderExecutionReport(SessionID sessionID, String clOrdId, String quoteReqId, 
+                                                        String symbol, double orderQty, String account) {
+        try {
+            Session session = Session.lookupSession(sessionID);
+            if (session == null || !session.isLoggedOn()) {
+                log.warn("Cannot send Short Locate Filled ExecutionReport: session {} is not logged on", sessionID);
+                return;
+            }
+
+            // Generate OrderID and ExecID based on ClOrdID pattern (LOC-XXX-1)
+            String orderId = clOrdId != null && clOrdId.startsWith("LOC-") 
+                ? clOrdId.replace("LOC-", "").split("-")[0] 
+                : String.valueOf(System.currentTimeMillis() % 10000);
+            String execId = clOrdId != null && !clOrdId.isEmpty() ? clOrdId : "EXEC-LOCATE-" + System.currentTimeMillis();
+            
+            // Short locate filled: Side=BUY, ExecType=FILL, OrdStatus=FILLED
+            ExecutionReport report = new ExecutionReport(
+                new OrderID(orderId),
+                new ExecID(execId),
+                new ExecTransType(ExecTransType.NEW),
+                new ExecType(ExecType.FILL),
+                new OrdStatus(OrdStatus.FILLED),
+                new Symbol(symbol),
+                new Side(Side.BUY), // Short locate orders are BUY orders
+                new LeavesQty(0.0), // Filled orders have 0 leaves
+                new CumQty(orderQty),
+                new AvgPx(0.01) // Typical locate price from production logs
+            );
+
+            if (clOrdId != null && !clOrdId.isEmpty()) {
+                report.setString(ClOrdID.FIELD, clOrdId);
+            }
+            // QuoteReqID (tag 131) is NOT valid in ExecutionReport messages in FIX 4.2
+            // It's only used in QuoteRequest/QuoteResponse messages
+            // Do NOT set QuoteReqID in ExecutionReport - it causes rejection
+            // if (quoteReqId != null && !quoteReqId.isEmpty()) {
+            //     report.setString(QuoteReqID.FIELD, quoteReqId);
+            // }
+            report.setString(Symbol.FIELD, symbol);
+            report.set(new OrderQty(orderQty));
+            report.set(new LastPx(0.01)); // Typical locate execution price
+            report.set(new LastShares(orderQty));
+            if (account != null && !account.isEmpty()) {
+                report.setString(Account.FIELD, account);
+            }
+            // ExDestination is optional - set to locate route if needed
+            // report.setString(ExDestination.FIELD, "TESTSL");
+            report.set(new TransactTime());
+
+            session.send(report);
+            log.info("Simulator sent Short Locate Filled ExecutionReport (session: {}): OrderID={}, ClOrdID={}, QuoteReqID={}, Symbol={}, Qty={}", 
+                sessionID, report.getString(OrderID.FIELD), clOrdId, quoteReqId, symbol, orderQty);
+        } catch (Exception e) {
+            log.error("Error sending Short Locate Filled ExecutionReport: {}", e.getMessage(), e);
+        }
+    }
 }
 

@@ -15,6 +15,8 @@ import java.awt.event.ActionListener;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.Timer;
+import java.util.TimerTask;
 
 /**
  * Swing GUI for sending drop copy ExecutionReport messages.
@@ -46,7 +48,12 @@ public class DropCopyMessageGui implements CommandLineRunner {
     private JComboBox<DropCopyMessageSender.ExecutionReportData.TimeInForce> timeInForceCombo;
     private JTextField accountField;
     private JTextField textField;
+    private JTextField quoteReqIdField;
+    private JTextField exDestinationField;
     private JTextArea statusArea;
+    private JComboBox<String> fillSampleTypeCombo;
+    private JLabel sessionStatusLabel;
+    private Timer sessionStatusTimer;
 
     @Autowired
     public DropCopyMessageGui(DropCopyMessageSender messageSender, SimulatorProperties properties) {
@@ -219,6 +226,12 @@ public class DropCopyMessageGui implements CommandLineRunner {
         // Account
         addLabelAndField(formPanel, gbc, row++, "Account:", accountField = new JTextField(30));
         
+        // QuoteReqID (for short locate)
+        addLabelAndField(formPanel, gbc, row++, "QuoteReqID:", quoteReqIdField = new JTextField(30));
+        
+        // ExDestination (tag 30)
+        addLabelAndField(formPanel, gbc, row++, "ExDestination:", exDestinationField = new JTextField(30));
+        
         // Text
         addLabelAndField(formPanel, gbc, row++, "Text:", textField = new JTextField(30));
 
@@ -232,9 +245,30 @@ public class DropCopyMessageGui implements CommandLineRunner {
         clearButton.addActionListener(e -> clearFields());
         buttonPanel.add(clearButton);
         
-        JButton fillSampleButton = new JButton("Fill Sample");
-        fillSampleButton.addActionListener(e -> fillSampleData());
-        buttonPanel.add(fillSampleButton);
+        JButton reconnectButton = new JButton("Reconnect Session");
+        reconnectButton.addActionListener(e -> reconnectSession());
+        reconnectButton.setToolTipText("Disconnect and reconnect to reset sequence numbers");
+        buttonPanel.add(reconnectButton);
+        
+        // Fill Sample dropdown
+        JLabel fillSampleLabel = new JLabel("Fill Sample:");
+        buttonPanel.add(fillSampleLabel);
+        String[] fillSampleTypes = {
+            "Select sample type...",
+            "Short Sell Filled",
+            "Long Buy Filled",
+            "Short Locate New Order"
+        };
+        fillSampleTypeCombo = new JComboBox<>(fillSampleTypes);
+        fillSampleTypeCombo.setSelectedIndex(0);
+        fillSampleTypeCombo.addActionListener(e -> {
+            String selected = (String) fillSampleTypeCombo.getSelectedItem();
+            if (selected != null && !selected.equals("Select sample type...")) {
+                fillSampleDataByType(selected);
+                fillSampleTypeCombo.setSelectedIndex(0); // Reset to default after filling
+            }
+        });
+        buttonPanel.add(fillSampleTypeCombo);
 
         // Status area
         statusArea = new JTextArea(8, 50);
@@ -244,8 +278,10 @@ public class DropCopyMessageGui implements CommandLineRunner {
         statusScroll.setBorder(BorderFactory.createTitledBorder("Status"));
 
         // Session status
-        JLabel sessionStatusLabel = new JLabel();
+        sessionStatusLabel = new JLabel();
         updateSessionStatus(sessionStatusLabel);
+        // Start timer to periodically update session status
+        startSessionStatusTimer();
         JPanel statusPanel = new JPanel(new BorderLayout());
         statusPanel.add(sessionStatusLabel, BorderLayout.NORTH);
         statusPanel.add(statusScroll, BorderLayout.CENTER);
@@ -270,7 +306,35 @@ public class DropCopyMessageGui implements CommandLineRunner {
         frame.add(mainPanel);
         frame.setVisible(true);
         
+        // Add window listener to clean up timer when window closes
+        frame.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosing(java.awt.event.WindowEvent windowEvent) {
+                stopSessionStatusTimer();
+            }
+        });
+        
         appendStatus("GUI initialized. Ready to send ExecutionReport messages.");
+    }
+
+    private void startSessionStatusTimer() {
+        // Update session status every 2 seconds
+        sessionStatusTimer = new Timer("SessionStatusTimer", true);
+        sessionStatusTimer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                if (sessionStatusLabel != null) {
+                    SwingUtilities.invokeLater(() -> updateSessionStatus(sessionStatusLabel));
+                }
+            }
+        }, 0, 2000); // Initial delay 0ms, repeat every 2000ms (2 seconds)
+    }
+
+    private void stopSessionStatusTimer() {
+        if (sessionStatusTimer != null) {
+            sessionStatusTimer.cancel();
+            sessionStatusTimer = null;
+        }
     }
 
     private void addLabelAndField(JPanel panel, GridBagConstraints gbc, int row, String label, JTextField field) {
@@ -332,16 +396,59 @@ public class DropCopyMessageGui implements CommandLineRunner {
         stopPxField.setText("");
         timeInForceCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.TimeInForce.DAY);
         accountField.setText("");
+        quoteReqIdField.setText("");
+        exDestinationField.setText("");
         textField.setText("");
         appendStatus("Fields cleared.");
     }
 
-    private void fillSampleData() {
-        orderIdField.setText("ORD-" + System.currentTimeMillis());
-        execIdField.setText("EXEC-" + System.currentTimeMillis());
-        clOrdIdField.setText("CLORD-" + System.currentTimeMillis());
+    private void fillSampleDataByType(String sampleType) {
+        switch (sampleType) {
+            case "Short Sell Filled":
+                fillShortSellFilledSample();
+                break;
+            case "Long Buy Filled":
+                fillLongBuyFilledSample();
+                break;
+            case "Short Locate New Order":
+                fillShortLocateNewOrderSample();
+                break;
+            default:
+                appendStatus("Unknown sample type: " + sampleType);
+        }
+    }
+
+    private void fillShortSellFilledSample() {
+        long timestamp = System.currentTimeMillis();
+        orderIdField.setText("SIM-SHORT-" + timestamp);
+        execIdField.setText("EXEC-SHORT-" + timestamp);
+        clOrdIdField.setText("CLORD-SHORT-" + timestamp);
         symbolField.setText("AAPL");
-        execTypeCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.ExecType.NEW);
+        execTypeCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.ExecType.FILLED);
+        ordStatusCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.OrdStatus.FILLED);
+        sideCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.Side.SELL_SHORT);
+        ordTypeCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.OrdType.MARKET);
+        orderQtyField.setText("100");
+        priceField.setText("150.50");
+        lastQtyField.setText("100");
+        leavesQtyField.setText("0");
+        cumQtyField.setText("100");
+        avgPxField.setText("150.50");
+        timeInForceCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.TimeInForce.DAY);
+        accountField.setText("PRIMARY_ACCOUNT");
+        quoteReqIdField.setText("");
+        exDestinationField.setText(""); // ExDestination not valid in ExecutionReport messages
+        textField.setText("");
+        appendStatus("Short Sell Filled sample data filled.");
+    }
+
+    private void fillLongBuyFilledSample() {
+        long timestamp = System.currentTimeMillis();
+        orderIdField.setText("SIM-LONG-" + timestamp);
+        execIdField.setText("EXEC-LONG-" + timestamp);
+        clOrdIdField.setText("CLORD-LONG-" + timestamp);
+        symbolField.setText("AAPL");
+        execTypeCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.ExecType.FILLED);
         ordStatusCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.OrdStatus.FILLED);
         sideCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.Side.BUY);
         ordTypeCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.OrdType.MARKET);
@@ -353,7 +460,81 @@ public class DropCopyMessageGui implements CommandLineRunner {
         avgPxField.setText("150.50");
         timeInForceCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.TimeInForce.DAY);
         accountField.setText("PRIMARY_ACCOUNT");
-        appendStatus("Sample data filled.");
+        quoteReqIdField.setText("");
+        exDestinationField.setText(""); // ExDestination not valid in ExecutionReport messages
+        textField.setText("");
+        appendStatus("Long Buy Filled sample data filled.");
+    }
+
+    private void fillShortLocateNewOrderSample() {
+        long timestamp = System.currentTimeMillis();
+        // Short locate orders use pattern LOC-XXX-1 for ClOrdID
+        String clOrdId = "LOC-" + (timestamp % 10000) + "-1";
+        clOrdIdField.setText(clOrdId);
+        // OrderID is typically the numeric part from ClOrdID
+        orderIdField.setText(String.valueOf(timestamp % 10000));
+        execIdField.setText(clOrdId); // ExecID matches ClOrdID for locate orders
+        String quoteReqId = "QUOTE-" + timestamp;
+        quoteReqIdField.setText(quoteReqId);
+        symbolField.setText("NBY"); // Common symbol for locate orders in production
+        execTypeCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.ExecType.FILLED);
+        ordStatusCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.OrdStatus.FILLED);
+        sideCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.Side.BUY); // Short locate orders are BUY
+        ordTypeCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.OrdType.MARKET);
+        orderQtyField.setText("100");
+        priceField.setText("0.01"); // Typical locate execution price
+        lastQtyField.setText("100");
+        leavesQtyField.setText("0"); // Filled orders have 0 leaves
+        cumQtyField.setText("100");
+        avgPxField.setText("0.01");
+        timeInForceCombo.setSelectedItem(DropCopyMessageSender.ExecutionReportData.TimeInForce.DAY);
+        accountField.setText("PRIMARY_ACCOUNT");
+        exDestinationField.setText(""); // ExDestination not valid in ExecutionReport messages
+        textField.setText("");
+        appendStatus("Short Locate Filled sample data filled (Side=BUY, ExecType=FILLED, OrdStatus=FILLED).");
+    }
+
+    private void reconnectSession() {
+        try {
+            SessionID sessionID = findInitiatorSession();
+            if (sessionID == null) {
+                appendStatus("ERROR: Cannot reconnect - session not found");
+                JOptionPane.showMessageDialog(frame, "Session not found. Cannot reconnect.", "Error", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            
+            Session session = Session.lookupSession(sessionID);
+            if (session == null) {
+                appendStatus("ERROR: Cannot reconnect - session object not found");
+                JOptionPane.showMessageDialog(frame, "Session object not found. Cannot reconnect.", "Error", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            
+            appendStatus("Disconnecting session to reset sequence numbers...");
+            session.logout();
+            
+            // Wait a bit then reconnect
+            new Thread(() -> {
+                try {
+                    Thread.sleep(2000); // Wait 2 seconds
+                    SwingUtilities.invokeLater(() -> {
+                        appendStatus("Reconnecting session...");
+                        session.logon();
+                        appendStatus("Reconnection initiated. Session will reconnect automatically.");
+                        JOptionPane.showMessageDialog(frame, 
+                            "Session reconnection initiated.\nSequence numbers will be reset on next logon.", 
+                            "Reconnect", JOptionPane.INFORMATION_MESSAGE);
+                    });
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }).start();
+            
+        } catch (Exception e) {
+            appendStatus("ERROR during reconnect: " + e.getMessage());
+            log.error("Error reconnecting session", e);
+            JOptionPane.showMessageDialog(frame, "Error reconnecting: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
     }
 
     private void appendStatus(String message) {
@@ -423,6 +604,18 @@ public class DropCopyMessageGui implements CommandLineRunner {
                 data.setAccount(accountField.getText().trim());
                 data.setText(textField.getText().trim());
                 data.setTransactTime(LocalDateTime.now(ZoneOffset.UTC));
+                
+                // Set QuoteReqID if provided (for short locate)
+                String quoteReqId = quoteReqIdField.getText().trim();
+                if (!quoteReqId.isEmpty()) {
+                    data.setQuoteReqId(quoteReqId);
+                }
+                
+                // Set ExDestination if provided
+                String exDestination = exDestinationField.getText().trim();
+                if (!exDestination.isEmpty()) {
+                    data.setExDestination(exDestination);
+                }
 
                 // Send message
                 boolean success = messageSender.sendExecutionReport(data);

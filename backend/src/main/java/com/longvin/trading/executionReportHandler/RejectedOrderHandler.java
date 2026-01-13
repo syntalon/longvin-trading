@@ -97,9 +97,11 @@ public class RejectedOrderHandler implements ExecutionReportHandler {
         orderParams.put("clOrdID", newClOrdID);
         orderParams.put("symbol", context.getSymbol());
         orderParams.put("side", context.getSide());
-        orderParams.put("orderQty", context.getOrderQty());
+        orderParams.put("orderQty", context.getOrderQty() != null ? context.getOrderQty().intValue() : 0);
         orderParams.put("ordType", '2'); // LIMIT
-        orderParams.put("price", context.getAvgPx());
+        if (context.getAvgPx() != null) {
+            orderParams.put("price", context.getAvgPx().doubleValue());
+        }
         orderParams.put("timeInForce", '0'); // DAY
         orderParams.put("account", context.getAccount());
         orderParams.put("exDestination", alternativeRoute);

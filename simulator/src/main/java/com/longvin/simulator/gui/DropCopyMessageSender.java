@@ -8,7 +8,6 @@ import quickfix.fix42.ExecutionReport;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-import java.util.Optional;
 
 /**
  * Service for sending ExecutionReport (drop copy) messages through the simulator's initiator session.
@@ -37,12 +36,25 @@ public class DropCopyMessageSender {
             }
 
             ExecutionReport report = buildExecutionReport(data);
-            session.send(report);
             
-            log.info("Sent ExecutionReport via GUI (session: {}): OrderID={}, ExecType={}, Symbol={}, Side={}, Qty={}", 
-                sessionID, data.getOrderId(), data.getExecType(), data.getSymbol(), data.getSide(), data.getOrderQty());
+            // Log the message before sending for debugging
+            log.info("About to send ExecutionReport via GUI (session: {}): OrderID={}, ExecType={}, OrdStatus={}, Symbol={}, Side={}, Qty={}, Raw={}", 
+                sessionID, data.getOrderId(), data.getExecType(), data.getOrdStatus(), data.getSymbol(), data.getSide(), data.getOrderQty(), report.toString());
             
-            return true;
+            // Send the message
+            boolean sent = session.send(report);
+            
+            if (sent) {
+                log.info("Successfully queued ExecutionReport for sending (session: {}): OrderID={}, ExecType={}, Symbol={}, Side={}, Qty={}. " +
+                    "Message is queued. To verify actual transmission: 1) Check QuickFIX messages log: target/quickfix/simulator/store/log/FIX.4.2-SIM-DAST-SIM-OS111.messages.log " +
+                    "(look for your ExecutionReport) 2) Check backend logs for '[DROP COPY DEBUG] Received APP message' to confirm receipt.", 
+                    sessionID, data.getOrderId(), data.getExecType(), data.getSymbol(), data.getSide(), data.getOrderQty());
+            } else {
+                log.warn("Failed to queue ExecutionReport for sending (session: {}): OrderID={}. Message was NOT queued - session may be disconnected or not logged on.", 
+                    sessionID, data.getOrderId());
+            }
+            
+            return sent;
         } catch (Exception e) {
             log.error("Error sending ExecutionReport: {}", e.getMessage(), e);
             return false;
@@ -84,6 +96,7 @@ public class DropCopyMessageSender {
         );
 
         // Set optional fields
+        // ClOrdID - set if provided, but don't force it (was working before without forcing)
         if (data.getClOrdId() != null && !data.getClOrdId().isEmpty()) {
             report.setString(ClOrdID.FIELD, data.getClOrdId());
         }
@@ -121,6 +134,18 @@ public class DropCopyMessageSender {
         if (data.getText() != null && !data.getText().isEmpty()) {
             report.setString(Text.FIELD, data.getText());
         }
+        // QuoteReqID (tag 131) is NOT valid in ExecutionReport messages in FIX 4.2
+        // It's only used in QuoteRequest/QuoteResponse messages
+        // Do NOT set QuoteReqID in ExecutionReport - it causes rejection
+        // if (data.getQuoteReqId() != null && !data.getQuoteReqId().isEmpty()) {
+        //     report.setString(QuoteReqID.FIELD, data.getQuoteReqId());
+        // }
+        // ExDestination (tag 100) is NOT valid in ExecutionReport messages in FIX 4.2
+        // It's only used in NewOrderSingle messages
+        // Do NOT set ExDestination in ExecutionReport - it causes rejection
+        // if (data.getExDestination() != null && !data.getExDestination().isEmpty()) {
+        //     report.setString(ExDestination.FIELD, data.getExDestination());
+        // }
 
         return report;
     }
@@ -149,6 +174,8 @@ public class DropCopyMessageSender {
         private String account;
         private LocalDateTime transactTime;
         private String text;
+        private String quoteReqId;
+        private String exDestination;
 
         // Enums matching FIX values
         public enum ExecType {
@@ -234,6 +261,10 @@ public class DropCopyMessageSender {
         public void setTransactTime(LocalDateTime transactTime) { this.transactTime = transactTime; }
         public String getText() { return text; }
         public void setText(String text) { this.text = text; }
+        public String getQuoteReqId() { return quoteReqId; }
+        public void setQuoteReqId(String quoteReqId) { this.quoteReqId = quoteReqId; }
+        public String getExDestination() { return exDestination; }
+        public void setExDestination(String exDestination) { this.exDestination = exDestination; }
     }
 }
 

@@ -340,11 +340,24 @@ public class FillOrderHandler implements ExecutionReportHandler {
             orderParams.put("price", primaryOrder.getPrice().doubleValue());
         }
 
+        // Use the same route (exDestination) as the primary account order
+        String route = null;
+        if (context.getExDestination() != null && !context.getExDestination().isBlank()) {
+            route = context.getExDestination();
+            orderParams.put("exDestination", route);
+        }
+
+        // Log the copy order details before sending
+        String routeInfo = route != null ? ", Route=" + route : "";
+        log.info("Sending copy order to shadow account {}: ClOrdID={}, Symbol={}, Side={}, Qty={}, OrdType={}, Price={}{}",
+                shadowAccountNumber, clOrdId, context.getSymbol(), context.getSide(), context.getOrderQty(),
+                ordType, primaryOrder.getPrice() != null ? primaryOrder.getPrice() : "N/A", routeInfo);
+
         // Send order
         fixMessageSender.sendNewOrderSingle(initiatorSessionID, orderParams);
         
-        log.info("Replicated order to shadow account {}: ClOrdID={}, Symbol={}, Side={}, Qty={}",
-                shadowAccountNumber, clOrdId, context.getSymbol(), context.getSide(), context.getOrderQty());
+        log.info("Copy order sent to shadow account {}: ClOrdID={}, Symbol={}, Side={}, Qty={}{}",
+                shadowAccountNumber, clOrdId, context.getSymbol(), context.getSide(), context.getOrderQty(), routeInfo);
     }
 
     /**

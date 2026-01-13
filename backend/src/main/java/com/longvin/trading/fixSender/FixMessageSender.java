@@ -16,6 +16,11 @@ import java.util.Map;
 @Component
 public class FixMessageSender {
     private static final Logger log = LoggerFactory.getLogger(FixMessageSender.class);
+
+    private void logSendFailure(String action, SessionID sessionID, String key, String value, Exception e) {
+        log.error("Failed to send {} (sessionID={}, {}={})", action, sessionID, key, value, e);
+    }
+
     public void sendShortLocateQuoteRequest(SessionID sessionID, String symbol, int qty,
                                             String account, String locateRoute, String quoteReqID) {
 
@@ -35,8 +40,9 @@ public class FixMessageSender {
 
         try {
             Session.sendToTarget(quoteReq, sessionID);
+            log.info("Short Locate Quote Request Message : {} sent to {}", quoteReq, sessionID);
         } catch (SessionNotFound e) {
-            log.error("Failed to send Short Locate Quote Request", e);
+            logSendFailure("Short Locate Quote Request", sessionID, "quoteReqID", quoteReqID, e);
         }
     }
 
@@ -54,8 +60,9 @@ public class FixMessageSender {
 
         try {
             Session.sendToTarget(acceptMsg, sessionID);
+            log.info("Short Locate Accept Message : {} sent to {}", acceptMsg, sessionID);
         } catch (SessionNotFound e) {
-            log.error("Failed to send Short Locate Accept", e);
+            logSendFailure("Short Locate Accept", sessionID, "orderID", orderID, e);
         }
     }
     
@@ -73,8 +80,9 @@ public class FixMessageSender {
 
         try {
             Session.sendToTarget(rejectMsg, sessionID);
+            log.info("Short Locate Reject Message : {} sent to {}", rejectMsg, sessionID);
         } catch (SessionNotFound e) {
-            log.error("Failed to send Short Locate Reject", e);
+            logSendFailure("Short Locate Reject", sessionID, "orderID", orderID, e);
         }
     }
 
@@ -108,8 +116,10 @@ public class FixMessageSender {
 
         try {
             Session.sendToTarget(newOrder, sessionID);
+            log.info("New Order Single Message : {} sent to {}", newOrder, sessionID);
         } catch (SessionNotFound e) {
-            log.error("Failed to send New Order Single", e);
+            Object clOrdId = params.get("clOrdID");
+            logSendFailure("New Order Single", sessionID, "clOrdID", clOrdId != null ? clOrdId.toString() : "null", e);
         }
     }
 
