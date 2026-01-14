@@ -340,6 +340,10 @@ public class DropCopyApplication extends MessageCracker implements Application {
     private void logDropCopyMessageReceived(String category, Message message, SessionID sessionID) {
         try {
             String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
+            if ("ADMIN".equals(category) && "0".equals(msgType)) {
+                // Skip noisy heartbeat logs for admin messages
+                return;
+            }
             String msgTypeName = getMsgTypeName(msgType);
             int seqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
             String senderCompId = message.getHeader().getString(quickfix.field.SenderCompID.FIELD);
