@@ -1,15 +1,11 @@
 package com.longvin.trading.executionReportHandler;
 
 import com.longvin.trading.dto.messages.ExecutionReportContext;
-import com.longvin.trading.fixSender.FixMessageSender;
 import com.longvin.trading.service.LocateRouteService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import quickfix.SessionID;
-
-import java.util.HashMap;
-import java.util.Map;
 
 /**
  * Handler for rejected orders (OrdStatus=8).
@@ -24,12 +20,9 @@ public class RejectedOrderHandler implements ExecutionReportHandler {
     
     private static final Logger log = LoggerFactory.getLogger(RejectedOrderHandler.class);
     
-    private final FixMessageSender fixMessageSender;
     private final LocateRouteService locateRouteService;
 
-    public RejectedOrderHandler(FixMessageSender fixMessageSender,
-                                LocateRouteService locateRouteService) {
-        this.fixMessageSender = fixMessageSender;
+    public RejectedOrderHandler(LocateRouteService locateRouteService) {
         this.locateRouteService = locateRouteService;
     }
 
@@ -76,77 +69,24 @@ public class RejectedOrderHandler implements ExecutionReportHandler {
     }
 
     /**
-     * Handle route-related rejection - retry with alternative route.
+     * Handle route-related rejection - log rejection without retrying.
      */
     private void handleRouteRejection(ExecutionReportContext context, SessionID sessionID) {
         log.info("Handling route-related rejection. ClOrdID={}, Reason={}",
                 context.getClOrdID(), context.getText());
 
-        // Validate required fields before proceeding
-        if (context.getSymbol() == null || context.getSymbol().isBlank()) {
-            log.error("Cannot retry order: Symbol is missing. ClOrdID={}", context.getClOrdID());
-            handlePermanentRejection(context);
-            return;
-        }
-
-        if (context.getSide() == 0) {
-            log.error("Cannot retry order: Side is missing. ClOrdID={}", context.getClOrdID());
-            handlePermanentRejection(context);
-            return;
-        }
-
-        if (context.getAccount() == null || context.getAccount().isBlank()) {
-            log.error("Cannot retry order: Account is missing. ClOrdID={}", context.getClOrdID());
-            handlePermanentRejection(context);
-            return;
-        }
-
+        // Log rejection details but do not send new orders
         String alternativeRoute = locateRouteService.getAvailableLocateRoute(context.getSymbol());
-        if (alternativeRoute == null || alternativeRoute.isBlank()) {
-            log.warn("No alternative route available for symbol: {}", context.getSymbol());
-            handlePermanentRejection(context);
-            return;
-        }
-
-        // Generate new ClOrdID for retry
-        String newClOrdID = context.getClOrdID() + "_RETRY_" + System.currentTimeMillis();
-
-        // Send new order with alternative route
-        Map<String, Object> orderParams = new HashMap<>();
-        orderParams.put("clOrdID", newClOrdID);
-        orderParams.put("symbol", context.getSymbol());
-        orderParams.put("side", context.getSide());
-        orderParams.put("orderQty", context.getOrderQty() != null && context.getOrderQty().intValue() > 0 
-                ? context.getOrderQty().intValue() : 1); // Default to 1 if missing
-        orderParams.put("ordType", '2'); // LIMIT
-        if (context.getAvgPx() != null && context.getAvgPx().doubleValue() > 0) {
-            orderParams.put("price", context.getAvgPx().doubleValue());
+        if (alternativeRoute != null && !alternativeRoute.isBlank()) {
+            log.info("Alternative route available but not retrying. ClOrdID={}, Symbol={}, AlternativeRoute={}",
+                    context.getClOrdID(), context.getSymbol(), alternativeRoute);
         } else {
-            // For LIMIT orders, we need a price. Use lastPx if available, otherwise log error
-            if (context.getLastPx() != null && context.getLastPx().doubleValue() > 0) {
-                orderParams.put("price", context.getLastPx().doubleValue());
-                log.warn("Using LastPx as price for retry order. ClOrdID={}, Price={}", 
-                        newClOrdID, context.getLastPx());
-            } else {
-                log.error("Cannot retry LIMIT order: No price available (AvgPx or LastPx). ClOrdID={}", 
-                        context.getClOrdID());
-                handlePermanentRejection(context);
-                return;
-            }
+            log.warn("No alternative route available for symbol: {}. ClOrdID={}",
+                    context.getSymbol(), context.getClOrdID());
         }
-        orderParams.put("timeInForce", '0'); // DAY
-        orderParams.put("account", context.getAccount());
-        orderParams.put("exDestination", alternativeRoute);
 
-        try {
-            fixMessageSender.sendNewOrderSingle(sessionID, orderParams);
-            log.info("Retrying order with alternative route. Original ClOrdID={}, New ClOrdID={}, Route={}",
-                    context.getClOrdID(), newClOrdID, alternativeRoute);
-        } catch (Exception e) {
-            log.error("Failed to retry order with alternative route. ClOrdID={}, Route={}, Error={}", 
-                    context.getClOrdID(), alternativeRoute, e.getMessage(), e);
-            handlePermanentRejection(context);
-        }
+        // Treat as permanent rejection - do not send new orders
+        handlePermanentRejection(context);
     }
 
     /**
