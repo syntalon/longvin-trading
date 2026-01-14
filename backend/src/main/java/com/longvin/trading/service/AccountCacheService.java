@@ -156,6 +156,30 @@ public class AccountCacheService implements ApplicationRunner {
     }
 
     /**
+     * Find active shadow accounts with the same strategy_key as the given account.
+     * @param primaryAccount the primary account to match strategy_key with
+     * @return list of active shadow accounts with matching strategy_key (immutable)
+     */
+    public List<Account> findActiveShadowAccountsByStrategyKey(Account primaryAccount) {
+        ensureInitialized();
+        if (primaryAccount == null || primaryAccount.getStrategyKey() == null || primaryAccount.getStrategyKey().isBlank()) {
+            log.warn("Primary account or strategyKey is null/blank, returning empty list. Account: {}", 
+                    primaryAccount != null ? primaryAccount.getAccountNumber() : "null");
+            return Collections.emptyList();
+        }
+        
+        String strategyKey = primaryAccount.getStrategyKey();
+        List<Account> matchingShadowAccounts = activeShadowAccounts.stream()
+                .filter(acc -> strategyKey.equals(acc.getStrategyKey()))
+                .collect(Collectors.toUnmodifiableList());
+        
+        log.debug("Found {} shadow accounts with strategyKey={} for primary account {}", 
+                matchingShadowAccounts.size(), strategyKey, primaryAccount.getAccountNumber());
+        
+        return matchingShadowAccounts;
+    }
+
+    /**
      * Find all accounts by account type.
      * @param accountType the account type
      * @return list of accounts (immutable)

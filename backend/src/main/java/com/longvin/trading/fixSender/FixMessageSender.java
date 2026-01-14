@@ -141,7 +141,12 @@ public class FixMessageSender {
             String account = (String) params.get("account");
             if (account != null && !account.isBlank()) {
                 newOrder.setString(Account.FIELD, account);
+                log.debug("Setting Account field in FIX message: Account={}, ClOrdID={}", account, clOrdID);
+            } else {
+                log.warn("Account parameter is null or blank for ClOrdID={}, Account field will not be set", clOrdID);
             }
+        } else {
+            log.warn("Account parameter missing in orderParams for ClOrdID={}, Account field will not be set", clOrdID);
         }
 
         if (params.containsKey("exDestination")) {

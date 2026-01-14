@@ -17,6 +17,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Handler for fill ExecutionReports (ExecType=1 or 2).
@@ -57,6 +58,10 @@ public class FillOrderHandler implements ExecutionReportHandler {
 
     @Override
     public void handle(ExecutionReportContext context, SessionID sessionID) {
+        // First check if this is a copy order by ClOrdID prefix (most reliable check)
+        // Copy orders have ClOrdID format: "COPY-{shadowAccount}-{primaryClOrdID}"
+        boolean isCopyOrder = context.getClOrdID() != null && context.getClOrdID().startsWith("COPY-");
+        
         // Check account type to determine if this is a primary account order or shadow account order
         AccountType accountType = null;
         Optional<Account> accountOpt = Optional.empty();
@@ -69,20 +74,45 @@ public class FillOrderHandler implements ExecutionReportHandler {
             }
         }
         
-        if (context.getExecType() == '2') {
-            log.info("Order completely filled. ClOrdID: {}, Account: {}, AccountId: {}, AvgPx: {}",
-                    context.getClOrdID(), context.getAccount(), accountId, context.getAvgPx());
-        } else {
-            log.info("Order partially filled. ClOrdID: {}, Account: {}, AccountId: {}, CumQty: {}/{}, LastPx: {}",
-                    context.getClOrdID(), context.getAccount(), accountId,
-                    context.getCumQty(), context.getOrderQty(),
-                    context.getAvgPx());
-        }
-        
         // Try to find the order from database (needed for order details)
         Order order = findOrderFromContext(context);
         
-        if (accountType == AccountType.PRIMARY) {
+        // Additional check: if order exists in DB and belongs to shadow account, it's a copy order
+        if (!isCopyOrder && order != null && order.getAccount() != null) {
+            if (order.getAccount().getAccountType() == AccountType.SHADOW) {
+                isCopyOrder = true;
+                log.debug("Detected copy order from database: ClOrdID={}, AccountType=SHADOW", context.getClOrdID());
+            }
+        }
+        
+        // CRITICAL: Also check if the order's ClOrdID in DB starts with "COPY-" 
+        // This handles cases where ExecutionReport comes back with OrderID as ClOrdID
+        // (DAS Trader sometimes uses OrderID as ClOrdID in subsequent ExecutionReports)
+        if (!isCopyOrder && order != null && order.getFixClOrdId() != null) {
+            if (order.getFixClOrdId().startsWith("COPY-")) {
+                isCopyOrder = true;
+                log.info("Detected copy order from database ClOrdID: ExecutionReport ClOrdID={}, DB ClOrdID={}", 
+                        context.getClOrdID(), order.getFixClOrdId());
+            }
+        }
+        
+        if (context.getExecType() == '2') {
+            log.info("Order completely filled. ClOrdID: {}, Account: {}, AccountId: {}, AvgPx: {}, IsCopyOrder: {}",
+                    context.getClOrdID(), context.getAccount(), accountId, context.getAvgPx(), isCopyOrder);
+        } else {
+            log.info("Order partially filled. ClOrdID: {}, Account: {}, AccountId: {}, CumQty: {}/{}, LastPx: {}, IsCopyOrder: {}",
+                    context.getClOrdID(), context.getAccount(), accountId,
+                    context.getCumQty(), context.getOrderQty(),
+                    context.getAvgPx(), isCopyOrder);
+        }
+        
+        if (isCopyOrder) {
+            // This is a copy order - only update order status/events, never run copy trades
+            // Even if the ExecutionReport has a PRIMARY account, if ClOrdID starts with "COPY-", it's a copy order
+            log.info("Copy order detected - skipping replication. ClOrdID={}, Account={}, AccountId={}, ExecType={}, OrdStatus={}",
+                    context.getClOrdID(), context.getAccount(), accountId, context.getExecType(), context.getOrdStatus());
+            handleShadowAccountOrderExecutionReport(context, order);
+        } else if (accountType == AccountType.PRIMARY) {
             // This is a primary/main account order from DAS Trader - run copy trades to shadow accounts
             handlePrimaryOrderExecutionReport(context, order);
         } else if (accountType == AccountType.SHADOW) {
@@ -115,17 +145,29 @@ public class FillOrderHandler implements ExecutionReportHandler {
         }
         SessionID initiatorSessionID = initiatorSessionOpt.get();
 
-        // Get shadow accounts
-        List<Account> shadowAccounts = accountCacheService.findActiveShadowAccounts();
-        if (shadowAccounts.isEmpty()) {
-            log.warn("No shadow accounts found, cannot replicate short order. ClOrdID={}, AccountId: {}",
+        // Build order from context if order entity is null
+        if (order == null) {
+            order = buildOrderFromContext(context);
+            primaryAccountId = order.getAccount() != null ? order.getAccount().getId() : null;
+        }
+
+        // Get primary account to filter shadow accounts by strategy_key
+        Account primaryAccount = order.getAccount();
+        if (primaryAccount == null) {
+            log.warn("Primary account not found in order, cannot replicate short order. ClOrdID={}, AccountId: {}",
                     context.getClOrdID(), primaryAccountId);
             return;
         }
 
-        // Build order from context if order entity is null
-        if (order == null) {
-            order = buildOrderFromContext(context);
+        // Get shadow accounts with same strategy_key as primary account
+        List<Account> shadowAccounts = accountCacheService.findActiveShadowAccountsByStrategyKey(primaryAccount);
+        log.info("Found {} shadow account(s) for short order replication: StrategyKey={}, PrimaryAccount={}, PrimaryAccountId={}, ShadowAccounts={}",
+                shadowAccounts.size(), primaryAccount.getStrategyKey(), primaryAccount.getAccountNumber(), primaryAccountId,
+                shadowAccounts.stream().map(Account::getAccountNumber).collect(Collectors.toList()));
+        if (shadowAccounts.isEmpty()) {
+            log.warn("No shadow accounts found with same strategy_key ({}), cannot replicate short order. ClOrdID={}, AccountId: {}",
+                    primaryAccount.getStrategyKey(), context.getClOrdID(), primaryAccountId);
+            return;
         }
 
         // Send orders to each shadow account
@@ -246,17 +288,29 @@ public class FillOrderHandler implements ExecutionReportHandler {
         }
         SessionID initiatorSessionID = initiatorSessionOpt.get();
 
-        // Get shadow accounts
-        List<Account> shadowAccounts = accountCacheService.findActiveShadowAccounts();
-        if (shadowAccounts.isEmpty()) {
-            log.warn("No shadow accounts found, cannot replicate locate order. ClOrdID={}, AccountId: {}",
+        // Build order from context if order entity is null
+        if (order == null) {
+            order = buildOrderFromContext(context);
+            primaryAccountId = order.getAccount() != null ? order.getAccount().getId() : null;
+        }
+
+        // Get primary account to filter shadow accounts by strategy_key
+        Account primaryAccount = order.getAccount();
+        if (primaryAccount == null) {
+            log.warn("Primary account not found in order, cannot replicate locate order. ClOrdID={}, AccountId: {}",
                     context.getClOrdID(), primaryAccountId);
             return;
         }
 
-        // Build order from context if order entity is null
-        if (order == null) {
-            order = buildOrderFromContext(context);
+        // Get shadow accounts with same strategy_key as primary account
+        List<Account> shadowAccounts = accountCacheService.findActiveShadowAccountsByStrategyKey(primaryAccount);
+        log.info("Found {} shadow account(s) for locate order replication: StrategyKey={}, PrimaryAccount={}, PrimaryAccountId={}, ShadowAccounts={}",
+                shadowAccounts.size(), primaryAccount.getStrategyKey(), primaryAccount.getAccountNumber(), primaryAccountId,
+                shadowAccounts.stream().map(Account::getAccountNumber).collect(Collectors.toList()));
+        if (shadowAccounts.isEmpty()) {
+            log.warn("No shadow accounts found with same strategy_key ({}), cannot replicate locate order. ClOrdID={}, AccountId: {}",
+                    primaryAccount.getStrategyKey(), context.getClOrdID(), primaryAccountId);
+            return;
         }
 
         // Send locate orders to each shadow account
@@ -324,17 +378,29 @@ public class FillOrderHandler implements ExecutionReportHandler {
         }
         SessionID initiatorSessionID = initiatorSessionOpt.get();
 
-        // Get shadow accounts
-        List<Account> shadowAccounts = accountCacheService.findActiveShadowAccounts();
-        if (shadowAccounts.isEmpty()) {
-            log.warn("No shadow accounts found, cannot replicate order. ClOrdID={}, AccountId: {}",
+        // Build order from context if order entity is null
+        if (order == null) {
+            order = buildOrderFromContext(context);
+            primaryAccountId = order.getAccount() != null ? order.getAccount().getId() : null;
+        }
+
+        // Get primary account to filter shadow accounts by strategy_key
+        Account primaryAccount = order.getAccount();
+        if (primaryAccount == null) {
+            log.warn("Primary account not found in order, cannot replicate order. ClOrdID={}, AccountId: {}",
                     context.getClOrdID(), primaryAccountId);
             return;
         }
 
-        // Build order from context if order entity is null
-        if (order == null) {
-            order = buildOrderFromContext(context);
+        // Get shadow accounts with same strategy_key as primary account
+        List<Account> shadowAccounts = accountCacheService.findActiveShadowAccountsByStrategyKey(primaryAccount);
+        log.info("Found {} shadow account(s) for replication: StrategyKey={}, PrimaryAccount={}, PrimaryAccountId={}, ShadowAccounts={}",
+                shadowAccounts.size(), primaryAccount.getStrategyKey(), primaryAccount.getAccountNumber(), primaryAccountId,
+                shadowAccounts.stream().map(Account::getAccountNumber).collect(Collectors.toList()));
+        if (shadowAccounts.isEmpty()) {
+            log.warn("No shadow accounts found with same strategy_key ({}), cannot replicate order. ClOrdID={}, AccountId: {}",
+                    primaryAccount.getStrategyKey(), context.getClOrdID(), primaryAccountId);
+            return;
         }
 
         // Send orders to each shadow account
@@ -403,17 +469,17 @@ public class FillOrderHandler implements ExecutionReportHandler {
 
         // Log the copy order details before sending
         String routeInfo = route != null ? ", Route=" + route : "";
-        log.info("Sending copy order to shadow account {} (AccountId: {}): ClOrdID={}, PrimaryAccountId: {}, Symbol={}, Side={}, Qty={}, OrdType={}, Price={}{}",
+        log.info("Sending copy order to shadow account {} (AccountId: {}): ClOrdID={}, PrimaryAccountId: {}, Symbol={}, Side={}, Qty={}, OrdType={}, Price={}{}, AccountInOrder={}",
                 shadowAccountNumber, shadowAccount.getId(), clOrdId, primaryAccountId, context.getSymbol(), 
                 context.getSide(), context.getOrderQty(), ordType, 
-                primaryOrder.getPrice() != null ? primaryOrder.getPrice() : "N/A", routeInfo);
+                primaryOrder.getPrice() != null ? primaryOrder.getPrice() : "N/A", routeInfo, shadowAccountNumber);
 
         // Send order
         fixMessageSender.sendNewOrderSingle(initiatorSessionID, orderParams);
         
-        log.info("Copy order sent to shadow account {} (AccountId: {}): ClOrdID={}, PrimaryAccountId: {}, Symbol={}, Side={}, Qty={}{}",
+        log.info("Copy order sent to shadow account {} (AccountId: {}): ClOrdID={}, PrimaryAccountId: {}, Symbol={}, Side={}, Qty={}{}, AccountInOrder={}",
                 shadowAccountNumber, shadowAccount.getId(), clOrdId, primaryAccountId, 
-                context.getSymbol(), context.getSide(), context.getOrderQty(), routeInfo);
+                context.getSymbol(), context.getSide(), context.getOrderQty(), routeInfo, shadowAccountNumber);
     }
 
     
@@ -422,6 +488,21 @@ public class FillOrderHandler implements ExecutionReportHandler {
      * Runs copy trades to shadow accounts when orders are filled.
      */
     private void handlePrimaryOrderExecutionReport(ExecutionReportContext context, Order order) {
+        // CRITICAL SAFEGUARD: Double-check this is NOT a copy order before replicating
+        // Check ClOrdID in context
+        if (context.getClOrdID() != null && context.getClOrdID().startsWith("COPY-")) {
+            log.warn("BLOCKED: Attempted to replicate copy order! ClOrdID={}, Account={}. This should never happen.",
+                    context.getClOrdID(), context.getAccount());
+            return;
+        }
+        
+        // Check ClOrdID in order entity if available
+        if (order != null && order.getFixClOrdId() != null && order.getFixClOrdId().startsWith("COPY-")) {
+            log.warn("BLOCKED: Attempted to replicate copy order! ExecutionReport ClOrdID={}, DB ClOrdID={}, Account={}. This should never happen.",
+                    context.getClOrdID(), order.getFixClOrdId(), context.getAccount());
+            return;
+        }
+        
         Long accountId = order != null && order.getAccount() != null ? order.getAccount().getId() : null;
         log.debug("Processing ExecutionReport for primary account order: ClOrdID={}, Account: {}, AccountId: {}",
                 context.getClOrdID(), context.getAccount(), accountId);
@@ -430,6 +511,13 @@ public class FillOrderHandler implements ExecutionReportHandler {
         if (order == null) {
             order = buildOrderFromContext(context);
             accountId = order.getAccount() != null ? order.getAccount().getId() : null;
+        }
+        
+        // Final safeguard: Check account type one more time
+        if (order.getAccount() != null && order.getAccount().getAccountType() == AccountType.SHADOW) {
+            log.warn("BLOCKED: Attempted to replicate shadow account order! ClOrdID={}, Account={}, AccountType=SHADOW. This should never happen.",
+                    context.getClOrdID(), context.getAccount());
+            return;
         }
         
         // For primary account orders, replicate to shadow accounts when filled

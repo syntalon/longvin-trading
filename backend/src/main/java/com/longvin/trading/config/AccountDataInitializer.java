@@ -117,8 +117,8 @@ public class AccountDataInitializer implements ApplicationRunner {
         // Determine account type: TROS107 is PRIMARY, others are SHADOW
         AccountType accountType = "TROS107".equals(accountNumber) ? AccountType.PRIMARY : AccountType.SHADOW;
         
-        // Determine strategy key: TROS107 -> TEST_PRIMARY, TRDAS83 -> TEST_SHADOW
-        String strategyKey = "TROS107".equals(accountNumber) ? "TEST_PRIMARY" : "TEST_SHADOW";
+        // Set strategy key to "TEST" for both TRDAS83 and TROS107 (same group)
+        String strategyKey = "TEST";
         
         Account account = accountRepository.findByAccountNumber(accountNumber)
                 .orElseGet(() -> {
