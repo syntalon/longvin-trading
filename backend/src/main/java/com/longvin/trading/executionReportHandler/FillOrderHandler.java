@@ -251,22 +251,11 @@ public class FillOrderHandler implements ExecutionReportHandler {
     /**
      * Check if this is a locate order (Short Locate New Order).
      * A locate order is identified by:
-     * - Side = BUY ('1')
-     * - ExDestination is set (typically contains "LOCATE")
+     * - ClOrdID starts with "LOC-"
      */
     private boolean isLocateOrder(ExecutionReportContext context) {
-        // Locate orders are BUY orders with ExDestination set to a locate route
-        if (context.getSide() != '1') { // Side='1' is BUY
-            return false;
-        }
-        
-        String exDestination = context.getExDestination();
-        if (exDestination == null || exDestination.isBlank()) {
-            return false;
-        }
-        
-        // Check if ExDestination indicates a locate route (typically contains "LOCATE")
-        return exDestination.toUpperCase().contains("LOCATE");
+        String clOrdId = context.getClOrdID();
+        return clOrdId != null && clOrdId.startsWith("LOC-");
     }
 
     /**

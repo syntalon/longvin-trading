@@ -52,29 +52,34 @@ public class LocateOfferHandler implements ExecutionReportHandler {
 
     @Override
     public boolean supports(ExecutionReportContext context) {
+        // Support locate confirmations even when OrdStatus indicator is missing
+        // Primary signal: ClOrdID starts with "LOC-"
+        String clOrdId = context.getClOrdID();
+        boolean isLocateClOrd = clOrdId != null && clOrdId.startsWith("LOC-");
         // OrdStatus=B ('Calculated') is used for Locate in DAS
-        return context.getOrdStatus() == 'B';
+        return isLocateClOrd || context.getOrdStatus() == 'B';
     }
 
     @Override
     public void handle(ExecutionReportContext context, SessionID sessionID) {
-        log.info("Received OrdStatus=B (Locate): OrderID={}, ClOrdID={}, Symbol={}, Qty={}, Side={} ({})",
-                context.getOrderID(), context.getClOrdID(), context.getSymbol(), 
-                context.getOrderQty(), context.getSide(), 
+        String clOrdId = context.getClOrdID();
+        boolean isLocateClOrd = clOrdId != null && clOrdId.startsWith("LOC-");
+        log.info("Received locate-related ExecutionReport: OrdStatus={}, OrderID={}, ClOrdID={}, Symbol={}, Qty={}, Side={} ({})",
+                context.getOrdStatus(), context.getOrderID(), clOrdId, context.getSymbol(),
+                context.getOrderQty(), context.getSide(),
                 context.isShortOrder() ? "Short" : "Regular");
 
-        // Determine if this is Quote Protocol Confirmation or Offer Protocol
-        String clOrdId = context.getClOrdID();
-        
         // Check if this is a Quote Protocol confirmation (we initiated the locate request)
         Optional<LocateRequest> locateRequestOpt = findLocateRequestByClOrdId(clOrdId);
         
         if (locateRequestOpt.isPresent()) {
             // Quote Protocol: This is a confirmation after we sent Accept
             handleQuoteProtocolConfirmation(context, sessionID, locateRequestOpt.get());
-        } else {
+        } else if (context.getOrdStatus() == 'B') {
             // Offer Protocol: This is a new locate offer from broker
             handleOfferProtocol(context, sessionID);
+        } else if (isLocateClOrd) {
+            log.debug("Locate ClOrdID with no matching LocateRequest and OrdStatus != B, skipping. ClOrdID={}", clOrdId);
         }
     }
 
