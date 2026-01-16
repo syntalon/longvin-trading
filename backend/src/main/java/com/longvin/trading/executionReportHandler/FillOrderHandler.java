@@ -297,10 +297,8 @@ public class FillOrderHandler implements ExecutionReportHandler {
      * Type 0 (e.g., TESTSL):
      * 1. User places locate order in DAS Trader → ExecutionReport with fill (section 3.5)
      * 2. Check route type is Type 0 and filled status
-     * 3. Send Short Locate Quote Request (section 3.11) for each shadow account
-     * 4. LocateResponseHandler receives Short Locate Quote Response (section 3.12)
-     * 5. LocateResponseHandler sends locate order (section 3.14)
-     * 6. Get ExecutionReport (section 3.5) → Route 0 locate copy completed
+     * 3. Send locate order (section 3.14) directly to shadow accounts (skip quote request/response)
+     * 4. Get ExecutionReport (section 3.5) → Route 0 locate copy completed
      * 
      * Type 1 (e.g., LOCATE):
      * 1. User places locate order in DAS Trader → ExecutionReport with fill (section 3.5)
@@ -364,14 +362,17 @@ public class FillOrderHandler implements ExecutionReportHandler {
         }
 
         // Process based on route type
+        // Both Type 0 and Type 1 send locate orders directly to shadow accounts
+        // Type 0: Locate order fills directly (no offer step)
+        // Type 1: Locate order returns offer (OrdStatus=B), then accept/reject, then fills
         if (routeType == LocateRouteService.LocateRouteType.TYPE_0) {
-            // Type 0: Send Short Locate Quote Request (section 3.11) for each shadow account
-            log.info("Type 0 route detected, sending Short Locate Quote Request (3.11) for each shadow account");
+            // Type 0: Send locate order (section 3.14) directly to shadow accounts (skip quote request/response)
+            log.info("Type 0 route detected, sending locate order (3.14) directly to shadow accounts");
             for (Account shadowAccount : shadowAccounts) {
                 try {
-                    sendShortLocateQuoteRequestForShadowAccount(context, order, shadowAccount, initiatorSessionID);
+                    sendLocateOrderToShadowAccount(context, order, shadowAccount, initiatorSessionID);
                 } catch (Exception e) {
-                    log.error("Error sending Short Locate Quote Request to shadow account {} (AccountId: {}): {}", 
+                    log.error("Error sending locate order to shadow account {} (AccountId: {}): {}", 
                             shadowAccount.getAccountNumber(), shadowAccount.getId(), e.getMessage(), e);
                 }
             }
@@ -389,41 +390,6 @@ public class FillOrderHandler implements ExecutionReportHandler {
         } else {
             log.warn("Unknown route type: {} for route: {}, cannot process locate replication", routeType, locateRoute);
         }
-    }
-
-    /**
-     * Send Short Locate Quote Request (section 3.11) for a shadow account.
-     * This is used for Type 0 routes. After receiving the quote response (3.12),
-     * LocateResponseHandler will send the locate order (3.14).
-     */
-    private void sendShortLocateQuoteRequestForShadowAccount(ExecutionReportContext context, Order primaryOrder,
-                                                             Account shadowAccount, SessionID initiatorSessionID) {
-        String shadowAccountNumber = shadowAccount.getAccountNumber();
-        String primaryClOrdId = context.getClOrdID();
-        String locateRoute = context.getExDestination();
-        
-        // Generate QuoteReqID that includes shadow account info and route for tracking
-        // Format: QL_{shadowAccount}_{primaryClOrdId}_{route}_{timestamp}
-        String quoteReqID = "QL_" + shadowAccountNumber + "_" + primaryClOrdId + "_" + 
-                           (locateRoute != null ? locateRoute : "UNKNOWN") + "_" + System.currentTimeMillis();
-        
-        log.info("Sending Short Locate Quote Request (3.11) for shadow account {} (AccountId: {}): QuoteReqID={}, PrimaryClOrdID={}, Symbol={}, Qty={}, Route={}",
-                shadowAccountNumber, shadowAccount.getId(), quoteReqID, primaryClOrdId, 
-                context.getSymbol(), context.getOrderQty(), locateRoute);
-        
-        fixMessageSender.sendShortLocateQuoteRequest(
-                initiatorSessionID,
-                context.getSymbol(),
-                context.getOrderQty().intValue(),
-                shadowAccountNumber,
-                locateRoute,
-                quoteReqID
-        );
-        
-        Long primaryAccountId = primaryOrder.getAccount() != null ? primaryOrder.getAccount().getId() : null;
-        log.info("Short Locate Quote Request sent for shadow account {} (AccountId: {}): QuoteReqID={}, PrimaryAccountId: {}, Symbol={}, Route={}",
-                shadowAccountNumber, shadowAccount.getId(), quoteReqID, primaryAccountId, 
-                context.getSymbol(), locateRoute);
     }
 
     /**
