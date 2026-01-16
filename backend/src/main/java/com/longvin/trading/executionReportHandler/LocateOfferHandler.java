@@ -17,14 +17,20 @@ import java.util.Optional;
 /**
  * Handler for all Locate-related ExecutionReports (OrdStatus=B).
  * 
- * Handles two scenarios:
- * 1. Quote Protocol (Route Type 0/2): After we send Accept, broker confirms with OrdStatus=B
- *    - ClOrdID matches our QuoteReqID (starts with "LOCATE_" or found in LocateRequest table)
+ * Handles two locate route types:
+ * 
+ * 1. Type 0/2 Routes (Quote Protocol):
+ *    - Price inquiry first (3.11) -> Response (3.12)
+ *    - Then locate order (3.14/3.1) -> Returns execution (3.5) - treated as normal order, fills directly
+ *    - After we send Accept, broker confirms with OrdStatus=B
+ *    - ClOrdID matches our QuoteReqID (found in LocateRequest table)
  *    - Action: Trigger shadow order placement
  * 
- * 2. Offer Protocol (Route Type 1): Broker sends OrdStatus=B as Locate Offer
+ * 2. Type 1 Routes (Offer Protocol):
+ *    - Locate order first (3.14/3.1) -> Returns offer (3.5 with OrdStatus=39=B)
  *    - This is a new offer we haven't seen before
- *    - Action: Decide to Accept or Reject the offer
+ *    - Action: Decide to Accept or Reject the offer (3.13)
+ *    - After accepting, broker returns execution (3.5) - FillOrderHandler will replicate
  */
 @Component
 public class LocateOfferHandler implements ExecutionReportHandler {
