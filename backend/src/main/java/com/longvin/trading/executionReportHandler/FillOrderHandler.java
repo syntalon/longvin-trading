@@ -118,8 +118,12 @@ public class FillOrderHandler implements ExecutionReportHandler {
         if (isCopyOrder) {
             // This is a copy order - only update order status/events, never run copy trades
             // Even if the ExecutionReport has a PRIMARY account, if ClOrdID starts with "COPY-", it's a copy order
-            log.info("Copy order detected - skipping replication. ClOrdID={}, Account={}, AccountId={}, ExecType={}, OrdStatus={}",
-                    context.getClOrdID(), context.getAccount(), accountId, context.getExecType(), context.getOrdStatus());
+            // Note: A locate order is a BUY order with ExDestination set to locate route. When it fills,
+            // it appears as a filled BUY order, which is correct behavior.
+            String orderType = isLocateOrder(context) ? "locate order (BUY with locate route)" : "regular order";
+            log.info("Copy order detected - skipping replication. ClOrdID={}, Account={}, AccountId={}, ExecType={}, OrdStatus={}, OrderType={}, Route={}",
+                    context.getClOrdID(), context.getAccount(), accountId, context.getExecType(), 
+                    context.getOrdStatus(), orderType, context.getExDestination());
             handleShadowAccountOrderExecutionReport(context, order);
         } else if (accountType == AccountType.PRIMARY) {
             // This is a primary/main account order from DAS Trader - run copy trades to shadow accounts
@@ -362,17 +366,17 @@ public class FillOrderHandler implements ExecutionReportHandler {
         }
 
         // Process based on route type
-        // Both Type 0 and Type 1 send locate orders directly to shadow accounts
-        // Type 0: Locate order fills directly (no offer step)
-        // Type 1: Locate order returns offer (OrdStatus=B), then accept/reject, then fills
+        // Type 0: Send Short Locate Quote Request (3.11) → Receive Quote Response (3.12) → Send locate order (3.14)
+        // Type 1: Send locate order (3.14) directly → Returns offer (OrdStatus=B) → Accept/reject → Fills
         if (routeType == LocateRouteService.LocateRouteType.TYPE_0) {
-            // Type 0: Send locate order (section 3.14) directly to shadow accounts (skip quote request/response)
-            log.info("Type 0 route detected, sending locate order (3.14) directly to shadow accounts");
+            // Type 0: Send Short Locate Quote Request (3.11) for each shadow account
+            // LocateResponseHandler will receive the response (3.12) and send the locate order (3.14)
+            log.info("Type 0 route detected, sending Short Locate Quote Request (3.11) for each shadow account");
             for (Account shadowAccount : shadowAccounts) {
                 try {
-                    sendLocateOrderToShadowAccount(context, order, shadowAccount, initiatorSessionID);
+                    sendShortLocateQuoteRequestForShadowAccount(context, order, shadowAccount, initiatorSessionID);
                 } catch (Exception e) {
-                    log.error("Error sending locate order to shadow account {} (AccountId: {}): {}", 
+                    log.error("Error sending Short Locate Quote Request to shadow account {} (AccountId: {}): {}", 
                             shadowAccount.getAccountNumber(), shadowAccount.getId(), e.getMessage(), e);
                 }
             }
@@ -390,6 +394,46 @@ public class FillOrderHandler implements ExecutionReportHandler {
         } else {
             log.warn("Unknown route type: {} for route: {}, cannot process locate replication", routeType, locateRoute);
         }
+    }
+
+    /**
+     * Send Short Locate Quote Request (MsgType=R, section 3.11) to a shadow account.
+     * This is used for Type 0 routes where we need to request a quote before sending the locate order.
+     * 
+     * QuoteReqID format: QL_{shadowAccount}_{primaryClOrdId}_{route}_{timestamp}
+     * This format allows LocateResponseHandler to identify which shadow account to send the locate order to.
+     */
+    private void sendShortLocateQuoteRequestForShadowAccount(ExecutionReportContext context, Order primaryOrder,
+                                                             Account shadowAccount, SessionID initiatorSessionID) {
+        String shadowAccountNumber = shadowAccount.getAccountNumber();
+        String locateRoute = context.getExDestination();
+        String primaryClOrdId = context.getClOrdID();
+        
+        // Generate QuoteReqID in format: QL_{shadowAccount}_{primaryClOrdId}_{route}_{timestamp}
+        // This allows LocateResponseHandler to identify the shadow account and route
+        long timestamp = System.currentTimeMillis();
+        String quoteReqID = String.format("QL_%s_%s_%s_%d", shadowAccountNumber, primaryClOrdId, locateRoute, timestamp);
+        
+        int qty = context.getOrderQty().intValue();
+        
+        log.info("Sending Short Locate Quote Request (3.11) to shadow account {} (AccountId: {}): " +
+                "QuoteReqID={}, Symbol={}, Qty={}, Route={}, PrimaryClOrdID={}",
+                shadowAccountNumber, shadowAccount.getId(), quoteReqID, context.getSymbol(), qty, locateRoute, primaryClOrdId);
+        
+        fixMessageSender.sendShortLocateQuoteRequest(
+                initiatorSessionID,
+                context.getSymbol(),
+                qty,
+                shadowAccountNumber,
+                locateRoute,
+                quoteReqID
+        );
+        
+        Long primaryAccountId = primaryOrder != null && primaryOrder.getAccount() != null ? 
+                primaryOrder.getAccount().getId() : null;
+        log.info("Short Locate Quote Request (3.11) sent to shadow account {} (AccountId: {}): " +
+                "QuoteReqID={}, Symbol={}, Qty={}, Route={}, PrimaryAccountId: {}",
+                shadowAccountNumber, shadowAccount.getId(), quoteReqID, context.getSymbol(), qty, locateRoute, primaryAccountId);
     }
 
     /**
@@ -419,12 +463,24 @@ public class FillOrderHandler implements ExecutionReportHandler {
         orderParams.put("timeInForce", timeInForce);
 
         // Send locate order
+        // IMPORTANT: This is a locate-only order (borrow stock), not an execute buy order.
+        // The ExDestination field set to a locate route (e.g., "TESTSL", "LOCATE") tells DAS
+        // this is a locate order, not a regular buy order. When it "fills" (OrdStatus=2),
+        // it means stock has been located/borrowed, NOT that a buy was executed.
+        String locateRoute = context.getExDestination();
+        log.info("Sending locate-only order (borrow stock, not execute buy) to shadow account {} (AccountId: {}): " +
+                "ClOrdID={}, Symbol={}, Side=BUY(1), ExDestination={} (locate route), Qty={}, OrdType={}, TimeInForce={}",
+                shadowAccountNumber, shadowAccount.getId(), clOrdId, context.getSymbol(), 
+                locateRoute, context.getOrderQty(), ordType, timeInForce);
+        
         fixMessageSender.sendNewOrderSingle(initiatorSessionID, orderParams);
         
-        Long primaryAccountId = primaryOrder.getAccount() != null ? primaryOrder.getAccount().getId() : null;
-        log.info("Replicated locate order to shadow account {} (AccountId: {}): ClOrdID={}, PrimaryAccountId: {}, Symbol={}, LocateRoute={}, Qty={}",
+        Long primaryAccountId = primaryOrder != null && primaryOrder.getAccount() != null ? 
+                primaryOrder.getAccount().getId() : null;
+        log.info("Locate order (3.14) sent to shadow account {} (AccountId: {}): ClOrdID={}, PrimaryAccountId: {}, Symbol={}, LocateRoute={}, Qty={}. " +
+                "This is a locate-only order (borrow stock), not an execute buy order.",
                 shadowAccountNumber, shadowAccount.getId(), clOrdId, primaryAccountId, 
-                context.getSymbol(), context.getExDestination(), context.getOrderQty());
+                context.getSymbol(), locateRoute, context.getOrderQty());
     }
 
     /**
