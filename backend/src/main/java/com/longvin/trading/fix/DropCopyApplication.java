@@ -45,21 +45,18 @@ public class DropCopyApplication extends MessageCracker implements Application {
     public void onCreate(SessionID sessionID) {
         log.info("Created drop-copy acceptor session {}", sessionID);
         
-        // Reset sequence numbers to 1 if it's a new day (per DAS Trader requirement)
-        sequenceNumberService.resetSequenceNumbersIfNewDay(sessionID);
-        
         // Set target sequence number to 1 initially to accept any incoming sequence number >= 1 from DAS Trader
         // The actual value will be synchronized in fromAdmin when Logon is received
-        // Sender sequence number is reset to 1 at start of each day per DAS Trader requirement
+        // DO NOT reset sender sequence number here - it will be synced in fromAdmin() when we receive Logon
+        // Daily reset happens at midnight via scheduled task, not on session creation
         try {
             Session session = Session.lookupSession(sessionID);
             if (session != null) {
                 session.setNextTargetMsgSeqNum(1);
-                // Ensure sender sequence number is also 1 (may have been reset by sequenceNumberService)
-                session.setNextSenderMsgSeqNum(1);
-                log.info("Drop copy acceptor session created {} - set targetSeqNum=1 and senderSeqNum=1. " +
-                    "Sequence numbers reset to 1 at start of each day per DAS Trader requirement. " +
-                    "Will synchronize target sequence number in fromAdmin when Logon is received.", sessionID);
+                // Don't set sender sequence number here - let it be synced from FileStore or from Logon message
+                log.info("Drop copy acceptor session created {} - set targetSeqNum=1 initially. " +
+                    "Will synchronize both target and sender sequence numbers in fromAdmin when Logon is received. " +
+                    "Daily reset happens at midnight via scheduled task.", sessionID);
             }
         } catch (Exception e) {
             log.debug("Could not set sequence numbers for drop copy acceptor session {}: {}", sessionID, e.getMessage());
@@ -71,19 +68,18 @@ public class DropCopyApplication extends MessageCracker implements Application {
         sessionRegistry.register("acceptor", sessionID);
         log.info("Logged on to drop-copy session {}", sessionID);
         
-        // Reset sequence numbers to 1 if it's a new day (per DAS Trader requirement)
-        // This ensures sequence numbers are reset at the start of each day's session
-        boolean wasReset = sequenceNumberService.resetSequenceNumbersIfNewDay(sessionID);
-        if (wasReset) {
-            log.info("Drop copy session logged on - sequence numbers reset to 1 for new day");
-        }
+        // DO NOT reset sequence numbers here - they were already synced in fromAdmin() when Logon message was received
+        // Daily reset happens at midnight via scheduled task, not on every logon
+        // Only reset if DAS Trader explicitly sent sequence number 1 (handled in fromAdmin())
         
-        // Log sequence numbers after logon
+        // Log sequence numbers after logon to verify they're correct
         try {
             Session session = Session.lookupSession(sessionID);
             if (session != null) {
                 int expectedSeqNum = session.getExpectedTargetNum();
-                log.info("Drop copy session logged on - expected target sequence number: {} (sender sequence number reset to 1 per DAS Trader requirement)", 
+                // Note: We can't easily get sender sequence number, but it should match what we synced in fromAdmin()
+                log.info("Drop copy session logged on - expected target sequence number: {}. " +
+                    "Sender sequence number was synced to match DAS Trader's sequence number in fromAdmin().", 
                     expectedSeqNum);
             }
         } catch (Exception e) {
