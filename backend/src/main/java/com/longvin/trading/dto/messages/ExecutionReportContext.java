@@ -78,6 +78,15 @@ public class ExecutionReportContext {
                 this.text = message.getString(Text.FIELD);
             }
 
+            // Capture ExDestination (route) if available in quote response
+            // In FIX 4.2, ExDestination is tag 30; in FIX 4.3+, it's tag 100
+            if (message.isSetField(ExDestination.FIELD)) {
+                this.exDestination = message.getString(ExDestination.FIELD);
+            } else if (message.isSetField(30)) {
+                // Explicit check for tag 30 (ExDestination in FIX 4.2)
+                this.exDestination = message.getString(30);
+            }
+
             // Map QuoteReqID to ClOrdID for compatibility with handlers that use ClOrdID as key
             this.clOrdID = this.quoteReqID;
 

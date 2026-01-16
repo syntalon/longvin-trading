@@ -259,6 +259,20 @@ public class DropCopyApplication extends MessageCracker implements Application {
         // Log all application messages received from drop copy session for debugging
         logDropCopyMessageReceived("APP", message, sessionID);
         
+        // Check if this is a Short Locate Quote Response (MsgType=S) - this should NOT come on drop copy session
+        // Short Locate Quote Responses should come on the initiator session (OS111->OPAL) where the request was sent
+        try {
+            String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
+            if ("S".equals(msgType)) {
+                log.warn("[DROP COPY WARNING] Received Short Locate Quote Response (MsgType=S) on DROP COPY session {} (DAST->OS111). " +
+                        "This is unexpected - Short Locate Quote Responses should come on the INITIATOR session (OS111->OPAL) " +
+                        "where the request was sent. Message: {}", sessionID, message);
+                // Still process it in case broker routing is different than expected
+            }
+        } catch (Exception e) {
+            log.debug("Could not check message type in drop copy session: {}", e.getMessage());
+        }
+        
         // Track the message for REST API
         trackDropCopyMessage(sessionID, message);
         

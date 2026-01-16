@@ -1,7 +1,6 @@
 package com.longvin.trading.executionReportHandler;
 
 import com.longvin.trading.dto.messages.ExecutionReportContext;
-import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -46,8 +45,14 @@ public class ExecutionReportProcessor {
             return;
         }
 
-        log.info("Processing ExecutionReport: ClOrdID={}, ExecType={}, OrdStatus={}, Symbol={}",
-                context.getClOrdID(), context.getExecType(), context.getOrdStatus(), context.getSymbol());
+        // Log different message types appropriately
+        if (context.isQuoteResponse()) {
+            log.info("Processing Short Locate Quote Response (MsgType=S): QuoteReqID={}, Symbol={}, OfferPx={}, OfferSize={}",
+                    context.getQuoteReqID(), context.getSymbol(), context.getOfferPx(), context.getOfferSize());
+        } else {
+            log.info("Processing ExecutionReport: ClOrdID={}, ExecType={}, OrdStatus={}, Symbol={}",
+                    context.getClOrdID(), context.getExecType(), context.getOrdStatus(), context.getSymbol());
+        }
 
         // Find ALL matching handlers instead of just the first one
         List<ExecutionReportHandler> matchedHandlers = new ArrayList<>();

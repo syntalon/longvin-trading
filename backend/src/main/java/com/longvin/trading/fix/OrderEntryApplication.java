@@ -175,7 +175,14 @@ public class OrderEntryApplication extends MessageCracker implements Application
 
         // Handle ExecutionReports (MsgType=8) and Short Locate Quote Responses (MsgType=S)
         // Both are processed by the ExecutionReportProcessor chain
+        // Note: Short Locate Quote Response comes on initiator session because the request was sent on initiator session
+        // This is different from ExecutionReports which come from drop copy session (DAST->OS111)
         if (quickfix.field.MsgType.EXECUTION_REPORT.equals(msgType) || "S".equals(msgType)) {
+            if ("S".equals(msgType)) {
+                log.info("Received Short Locate Quote Response (MsgType=S) on initiator session {} (OS111->OPAL). " +
+                        "This is expected because the Short Locate Quote Request was sent on this session. Message: {}", 
+                        sessionID, message);
+            }
             executionReportProcessor.process(message, sessionID);
         } else {
             // Other message types
