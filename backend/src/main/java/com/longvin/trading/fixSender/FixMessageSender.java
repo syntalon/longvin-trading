@@ -137,6 +137,13 @@ public class FixMessageSender {
             }
         }
 
+        if (params.containsKey("stopPx")) {
+            Double stopPx = (Double) params.get("stopPx");
+            if (stopPx != null && stopPx > 0) {
+                newOrder.setDouble(StopPx.FIELD, stopPx);
+            }
+        }
+
         if (params.containsKey("account")) {
             String account = (String) params.get("account");
             if (account != null && !account.isBlank()) {

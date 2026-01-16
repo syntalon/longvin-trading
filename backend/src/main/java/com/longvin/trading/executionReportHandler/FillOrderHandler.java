@@ -262,6 +262,20 @@ public class FillOrderHandler implements ExecutionReportHandler {
     }
 
     /**
+     * Check if this is a stop order (stop market or stop limit).
+     * Stop market orders have OrdType=3 (STOP/Stop Loss).
+     * Stop limit orders have OrdType=4 (STOP_LIMIT).
+     */
+    private boolean isStopOrder(Order order) {
+        if (order == null) {
+            return false;
+        }
+        Character ordType = order.getOrdType();
+        // OrdType='3' is STOP (stop market), OrdType='4' is STOP_LIMIT
+        return ordType != null && (ordType == '3' || ordType == '4');
+    }
+
+    /**
      * Check if this is a locate order (Short Locate New Order).
      * A locate order is identified by:
      * - Side=BUY (1)
@@ -645,6 +659,17 @@ public class FillOrderHandler implements ExecutionReportHandler {
         }
         
         // For primary account orders, replicate to shadow accounts when filled
+        // Skip stop orders (stop market and stop limit) - they are handled in NewOrderHandler when confirmed
+        if (isStopOrder(order)) {
+            String ordTypeName = order.getOrdType() != null && order.getOrdType() == '3' ? "STOP(3)" : "STOP_LIMIT(4)";
+            log.info("Stop order detected - skipping replication in FillOrderHandler. " +
+                    "ClOrdID={}, Account: {}, AccountId: {}, Symbol={}, OrdType={}. " +
+                    "Stop orders are copied when confirmed (NewOrderHandler), not when filled.",
+                    context.getClOrdID(), context.getAccount(), accountId, context.getSymbol(), ordTypeName);
+            // Only update order status/events, do NOT replicate stop orders
+            return;
+        }
+        
         // Check if this is a locate order (Side=BUY with ExDestination set to locate route)
         if (isLocateOrder(context)) {
             handleLocateOrderReplication(context, order);

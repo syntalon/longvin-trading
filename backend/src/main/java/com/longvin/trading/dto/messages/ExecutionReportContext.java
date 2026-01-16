@@ -40,6 +40,11 @@ public class ExecutionReportContext {
     private BigDecimal lastPx;
     private BigDecimal lastQty;
     
+    // Order type and pricing
+    private Character ordType;  // Tag 40 - 1=Market, 2=Limit, 3=Stop, 4=Stop Limit
+    private BigDecimal price;   // Tag 44 - Price for LIMIT and STOP_LIMIT orders
+    private BigDecimal stopPx;  // Tag 99 - Stop price for STOP and STOP_LIMIT orders
+    
     // Locate-specific fields (for OrdStatus=B)
     private BigDecimal offerPx;      // Tag 133 - fee per share
     private BigDecimal offerSize;    // Tag 135 - available shares
@@ -166,6 +171,21 @@ public class ExecutionReportContext {
 
         if (message.isSetField(Account.FIELD)) {
             this.account = message.getString(Account.FIELD);
+        }
+
+        // Capture OrdType (tag 40) - needed to identify order types like STOP_LIMIT
+        if (message.isSetField(OrdType.FIELD)) {
+            this.ordType = message.getChar(OrdType.FIELD);
+        }
+
+        // Capture Price (tag 44) - needed for LIMIT and STOP_LIMIT orders
+        if (message.isSetField(Price.FIELD)) {
+            this.price = BigDecimal.valueOf(message.getDouble(Price.FIELD));
+        }
+
+        // Capture StopPx (tag 99) - needed for STOP and STOP_LIMIT orders
+        if (message.isSetField(StopPx.FIELD)) {
+            this.stopPx = BigDecimal.valueOf(message.getDouble(StopPx.FIELD));
         }
 
         // Capture ExDestination (route)
