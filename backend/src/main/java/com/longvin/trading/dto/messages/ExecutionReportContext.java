@@ -42,6 +42,7 @@ public class ExecutionReportContext {
     
     // Order type and pricing
     private Character ordType;  // Tag 40 - 1=Market, 2=Limit, 3=Stop, 4=Stop Limit
+    private Character timeInForce;  // Tag 59 - 0=Day, 1=GTC, 2=OPG, 3=IOC, 4=FOK, 5=Day+
     private BigDecimal price;   // Tag 44 - Price for LIMIT and STOP_LIMIT orders
     private BigDecimal stopPx;  // Tag 99 - Stop price for STOP and STOP_LIMIT orders
     
@@ -178,14 +179,32 @@ public class ExecutionReportContext {
             this.ordType = message.getChar(OrdType.FIELD);
         }
 
+        // Capture TimeInForce (tag 59) - needed to copy order behavior (0=Day, 5=Day+, etc.)
+        if (message.isSetField(TimeInForce.FIELD)) {
+            this.timeInForce = message.getChar(TimeInForce.FIELD);
+        }
+
         // Capture Price (tag 44) - needed for LIMIT and STOP_LIMIT orders
         if (message.isSetField(Price.FIELD)) {
             this.price = BigDecimal.valueOf(message.getDouble(Price.FIELD));
         }
 
         // Capture StopPx (tag 99) - needed for STOP and STOP_LIMIT orders
+        // Try both StopPx.FIELD (standard) and explicit tag 99 check
         if (message.isSetField(StopPx.FIELD)) {
             this.stopPx = BigDecimal.valueOf(message.getDouble(StopPx.FIELD));
+        } else if (message.isSetField(99)) {
+            // Explicit check for tag 99 (StopPx) - similar to how we handle ExDestination tag 30
+            this.stopPx = BigDecimal.valueOf(message.getDouble(99));
+        }
+        
+        // Debug logging for STOP/STOP_LIMIT orders to see if StopPx is missing
+        if (this.ordType != null && (this.ordType == '3' || this.ordType == '4')) {
+            if (this.stopPx == null) {
+                String clOrdId = this.clOrdID != null ? this.clOrdID : "UNKNOWN";
+                System.out.println("[DEBUG] StopPx (tag 99) NOT found in ExecutionReport for STOP order: ClOrdID=" + clOrdId + 
+                        ", OrdType=" + this.ordType + ", Price=" + this.price + ", Message length=" + message.toString().length());
+            }
         }
 
         // Capture ExDestination (route)

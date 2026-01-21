@@ -472,8 +472,12 @@ public class FillOrderHandler implements ExecutionReportHandler {
         char ordType = primaryOrder.getOrdType() != null ? primaryOrder.getOrdType() : '1'; // MARKET
         orderParams.put("ordType", ordType);
         
-        // Set time in force (default to DAY if not available)
-        char timeInForce = primaryOrder.getTimeInForce() != null ? primaryOrder.getTimeInForce() : '0'; // DAY
+        // Set time in force - use from context first, then order entity, then default to DAY
+        // Parent order might have TimeInForce=5 (Day+), we should copy it to maintain same behavior
+        Character timeInForce = context.getTimeInForce();
+        if (timeInForce == null) {
+            timeInForce = primaryOrder.getTimeInForce() != null ? primaryOrder.getTimeInForce() : '0'; // Default to DAY
+        }
         orderParams.put("timeInForce", timeInForce);
 
         // Send locate order
@@ -572,8 +576,12 @@ public class FillOrderHandler implements ExecutionReportHandler {
         char ordType = primaryOrder.getOrdType() != null ? primaryOrder.getOrdType() : '1'; // MARKET
         orderParams.put("ordType", ordType);
         
-        // Set time in force (default to DAY if not available)
-        char timeInForce = primaryOrder.getTimeInForce() != null ? primaryOrder.getTimeInForce() : '0'; // DAY
+        // Set time in force - use from context first, then order entity, then default to DAY
+        // Parent order might have TimeInForce=5 (Day+), we should copy it to maintain same behavior
+        Character timeInForce = context.getTimeInForce();
+        if (timeInForce == null) {
+            timeInForce = primaryOrder.getTimeInForce() != null ? primaryOrder.getTimeInForce() : '0'; // Default to DAY
+        }
         orderParams.put("timeInForce", timeInForce);
         
         // Set price if it's a limit order (FixMessageSender only supports price, not stopPx)

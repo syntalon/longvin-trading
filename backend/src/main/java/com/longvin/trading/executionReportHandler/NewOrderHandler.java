@@ -60,6 +60,9 @@ public class NewOrderHandler implements ExecutionReportHandler {
         
         // Check if this is a stop order (stop market OrdType='3' or stop limit OrdType='4') - if so, copy to shadow accounts
         if (context.getOrdType() != null && (context.getOrdType() == '3' || context.getOrdType() == '4')) {
+            // Debug logging to check what fields are available
+            log.debug("Stop order detected - checking fields: ClOrdID={}, OrdType={}, Price={}, StopPx={}", 
+                    context.getClOrdID(), context.getOrdType(), context.getPrice(), context.getStopPx());
             // Get account to check if it's a primary account
             if (context.getAccount() != null) {
                 Optional<Account> accountOpt = accountCacheService.findByAccountNumber(context.getAccount());
@@ -149,9 +152,14 @@ public class NewOrderHandler implements ExecutionReportHandler {
         orderParams.put("account", shadowAccountNumber);
         orderParams.put("ordType", context.getOrdType()); // '3' for STOP, '4' for STOP_LIMIT
         
-        // TimeInForce - default to DAY if not available in context
-        // Note: TimeInForce is typically not in ExecutionReport, so we default to DAY
-        orderParams.put("timeInForce", '0'); // DAY
+        // TimeInForce - use from context if available, otherwise default to DAY
+        // Parent order might have TimeInForce=5 (Day+), we should copy it to maintain same behavior
+        Character timeInForce = context.getTimeInForce();
+        if (timeInForce == null) {
+            timeInForce = '0'; // Default to DAY if not available
+            log.debug("TimeInForce not in ExecutionReport, using default DAY(0) for ClOrdID={}", context.getClOrdID());
+        }
+        orderParams.put("timeInForce", timeInForce);
         
         // Set price for stop limit orders (OrdType='4')
         if (context.getOrdType() == '4' && context.getPrice() != null) {
@@ -159,9 +167,20 @@ public class NewOrderHandler implements ExecutionReportHandler {
         }
         
         // Set stop price for stop orders (required for both STOP and STOP_LIMIT orders)
-        if (context.getStopPx() != null) {
-            orderParams.put("stopPx", context.getStopPx().doubleValue());
+        // NOTE: DAS Trader's ExecutionReport for new order confirmation may not include StopPx (tag 99).
+        // If StopPx is missing, we cannot copy the order as it's required for stop orders.
+        java.math.BigDecimal stopPx = context.getStopPx();
+        if (stopPx == null) {
+            // StopPx is required for STOP and STOP_LIMIT orders
+            String ordTypeName = context.getOrdType() == '3' ? "STOP(3)" : "STOP_LIMIT(4)";
+            log.error("Cannot copy stop order to shadow account {} - StopPx (tag 99) is missing in ExecutionReport. " +
+                    "ClOrdID={}, Symbol={}, OrdType={}, Price={}. StopPx is required for stop orders but is not present in the ExecutionReport message. " +
+                    "Please verify that DAS Trader sends StopPx in ExecutionReport for stop orders.",
+                    shadowAccountNumber, context.getClOrdID(), context.getSymbol(), ordTypeName, context.getPrice());
+            throw new IllegalArgumentException("StopPx (tag 99) is required for stop orders but is missing in ExecutionReport for ClOrdID=" + context.getClOrdID());
         }
+        
+        orderParams.put("stopPx", stopPx.doubleValue());
         
         // Use the same route (exDestination) as the primary account order
         String route = context.getExDestination();
