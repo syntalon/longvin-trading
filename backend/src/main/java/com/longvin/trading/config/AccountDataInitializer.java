@@ -5,8 +5,10 @@ import com.longvin.trading.entities.accounts.AccountType;
 import com.longvin.trading.entities.accounts.Broker;
 import com.longvin.trading.entities.accounts.DasLoginId;
 import com.longvin.trading.entities.accounts.Route;
+import com.longvin.trading.entities.copy.CopyRule;
 import com.longvin.trading.repository.AccountRepository;
 import com.longvin.trading.repository.BrokerRepository;
+import com.longvin.trading.repository.CopyRuleRepository;
 import com.longvin.trading.repository.DasLoginIdRepository;
 import com.longvin.trading.repository.RouteRepository;
 import org.slf4j.Logger;
@@ -16,6 +18,8 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
 
 /**
  * Initializes default account data on application startup.
@@ -49,15 +53,18 @@ public class AccountDataInitializer implements ApplicationRunner {
     private final DasLoginIdRepository dasLoginIdRepository;
     private final AccountRepository accountRepository;
     private final RouteRepository routeRepository;
+    private final CopyRuleRepository copyRuleRepository;
 
     public AccountDataInitializer(BrokerRepository brokerRepository,
                                   DasLoginIdRepository dasLoginIdRepository,
                                   AccountRepository accountRepository,
-                                  RouteRepository routeRepository) {
+                                  RouteRepository routeRepository,
+                                  CopyRuleRepository copyRuleRepository) {
         this.brokerRepository = brokerRepository;
         this.dasLoginIdRepository = dasLoginIdRepository;
         this.accountRepository = accountRepository;
         this.routeRepository = routeRepository;
+        this.copyRuleRepository = copyRuleRepository;
     }
 
     @Override
@@ -74,6 +81,9 @@ public class AccountDataInitializer implements ApplicationRunner {
             for (String accountNumber : ACCOUNT_NUMBERS) {
                 ensureAccount(broker, dasLoginId, accountNumber);
             }
+
+            // Initialize default copy rules
+            ensureDefaultCopyRules();
 
             log.info("Account data initialization completed successfully");
         } catch (Exception e) {
@@ -235,6 +245,62 @@ public class AccountDataInitializer implements ApplicationRunner {
         } else {
             log.debug("Account {} is already linked to DAS login ID {}", accountNumber, DAS_LOGIN_ID);
         }
+    }
+
+    /**
+     * Ensures default copy rules exist.
+     * Creates a copy rule from TROS107 (PRIMARY) to TRDAS83 (SHADOW) if it doesn't exist.
+     * Uses the unique constraint on (primary_account_id, shadow_account_id) to check existence.
+     */
+    private void ensureDefaultCopyRules() {
+        // Find primary account (TROS107)
+        Account primaryAccount = accountRepository.findByAccountNumber("TROS107")
+                .orElseGet(() -> {
+                    log.warn("Primary account TROS107 not found, skipping copy rule initialization");
+                    return null;
+                });
+
+        // Find shadow account (TRDAS83)
+        Account shadowAccount = accountRepository.findByAccountNumber("TRDAS83")
+                .orElseGet(() -> {
+                    log.warn("Shadow account TRDAS83 not found, skipping copy rule initialization");
+                    return null;
+                });
+
+        if (primaryAccount == null || shadowAccount == null) {
+            log.warn("Cannot initialize copy rules: missing primary or shadow account");
+            return;
+        }
+
+        // Check if copy rule already exists for this account pair
+        if (copyRuleRepository.existsByAccountPair(primaryAccount.getId(), shadowAccount.getId())) {
+            log.debug("Copy rule already exists for primary account {} -> shadow account {}",
+                    primaryAccount.getAccountNumber(), shadowAccount.getAccountNumber());
+            return;
+        }
+
+        // Create default copy rule: 1:1 multiplier, copy on fill, all order types
+        CopyRule defaultRule = CopyRule.builder()
+                .primaryAccount(primaryAccount)
+                .shadowAccount(shadowAccount)
+                .ratioType(CopyRule.CopyRatioType.MULTIPLIER)
+                .ratioValue(BigDecimal.ONE) // 1:1 copy
+                .orderTypes(null) // Copy all order types
+                .copyRoute(null) // Use primary account's route
+                .locateRoute(null) // Use primary account's locate route
+                .copyBroker(null) // Use shadow account's broker
+                .minQuantity(null) // No minimum quantity threshold
+                .maxQuantity(null) // No maximum quantity threshold
+                .priority(0) // Default priority
+                .active(true)
+                .description("Default copy rule: TROS107 -> TRDAS83 (1:1 multiplier, all order types)")
+                .config(null) // No additional config
+                .build();
+
+        CopyRule saved = copyRuleRepository.save(defaultRule);
+        log.info("Created default copy rule: id={}, primaryAccount={}, shadowAccount={}, ratioType={}, ratioValue={}",
+                saved.getId(), primaryAccount.getAccountNumber(), shadowAccount.getAccountNumber(),
+                saved.getRatioType(), saved.getRatioValue());
     }
 }
 
