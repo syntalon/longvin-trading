@@ -19,6 +19,7 @@ export class CopyRulesComponent implements OnInit {
   constructor(private copyRuleService: CopyRuleService) {}
 
   ngOnInit() {
+    // Always load copy rules when component initializes (including on page refresh)
     this.loadCopyRules();
   }
 
@@ -29,12 +30,15 @@ export class CopyRulesComponent implements OnInit {
     this.copyRuleService.getAllCopyRules(undefined, undefined, this.showActiveOnly ? true : undefined)
       .subscribe({
         next: (rules) => {
-          this.copyRules = rules;
+          this.copyRules = rules || [];
           this.loading = false;
+          console.log(`Loaded ${this.copyRules.length} copy rule(s)`);
         },
         error: (err) => {
+          console.error('Error loading copy rules:', err);
           this.error = 'Error loading copy rules: ' + (err.message || 'Unknown error');
           this.loading = false;
+          this.copyRules = []; // Clear rules on error
         }
       });
   }
