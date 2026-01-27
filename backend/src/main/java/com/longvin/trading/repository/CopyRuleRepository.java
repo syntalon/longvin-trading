@@ -36,7 +36,12 @@ public interface CopyRuleRepository extends JpaRepository<CopyRule, Long> {
     
     /**
      * Find all active copy rules.
+     * Eagerly fetches primary and shadow accounts to avoid lazy loading issues.
      */
+    @Query("SELECT DISTINCT r FROM CopyRule r " +
+           "LEFT JOIN FETCH r.primaryAccount " +
+           "LEFT JOIN FETCH r.shadowAccount " +
+           "WHERE r.active = true")
     List<CopyRule> findByActiveTrue();
     
     /**

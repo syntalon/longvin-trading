@@ -25,6 +25,7 @@ public class CopyRuleService {
     private static final Logger log = LoggerFactory.getLogger(CopyRuleService.class);
 
     private final CopyRuleRepository copyRuleRepository;
+    private final AccountCacheService accountCacheService;
     
     // Cache: primary account ID -> List of active copy rules
     private final Map<Long, List<CopyRule>> rulesByPrimaryAccount = new ConcurrentHashMap<>();
@@ -32,10 +33,14 @@ public class CopyRuleService {
     // Cache: primary account ID + shadow account ID -> CopyRule
     private final Map<String, CopyRule> rulesByAccountPair = new ConcurrentHashMap<>();
     
+    // Cache: rule -> shadow account ID (to avoid lazy loading issues)
+    private final Map<CopyRule, Long> shadowAccountIdByRule = new ConcurrentHashMap<>();
+    
     private volatile boolean initialized = false;
 
-    public CopyRuleService(CopyRuleRepository copyRuleRepository) {
+    public CopyRuleService(CopyRuleRepository copyRuleRepository, AccountCacheService accountCacheService) {
         this.copyRuleRepository = copyRuleRepository;
+        this.accountCacheService = accountCacheService;
     }
 
     /**
@@ -48,10 +53,13 @@ public class CopyRuleService {
         
         rulesByPrimaryAccount.clear();
         rulesByAccountPair.clear();
+        shadowAccountIdByRule.clear();
         
         List<CopyRule> allRules = copyRuleRepository.findByActiveTrue();
         
         for (CopyRule rule : allRules) {
+            // Eagerly fetch account IDs while we're in a transaction
+            // The JOIN FETCH in the query should have loaded the accounts
             Long primaryAccountId = rule.getPrimaryAccount().getId();
             Long shadowAccountId = rule.getShadowAccount().getId();
             
@@ -62,6 +70,9 @@ public class CopyRuleService {
             // Cache by account pair
             String pairKey = primaryAccountId + ":" + shadowAccountId;
             rulesByAccountPair.put(pairKey, rule);
+            
+            // Cache shadow account ID for this rule (to avoid lazy loading later)
+            shadowAccountIdByRule.put(rule, shadowAccountId);
         }
         
         // Make lists immutable
@@ -205,14 +216,30 @@ public class CopyRuleService {
     /**
      * Get all shadow accounts that should receive copies for a primary account order.
      * Returns accounts with matching copy rules.
+     * Uses AccountCacheService to avoid lazy loading issues.
      */
     public List<Account> getShadowAccountsForCopy(Account primaryAccount, Character ordType,
                                                  String symbol, BigDecimal quantity) {
+        ensureInitialized();
+        
+        if (primaryAccount == null) {
+            return Collections.emptyList();
+        }
+        
         List<CopyRule> matchingRules = getMatchingRules(primaryAccount, ordType, symbol, quantity);
         
-        return matchingRules.stream()
-                .map(CopyRule::getShadowAccount)
-                .distinct()
+        // Extract shadow account IDs from cached map (avoids lazy loading)
+        Set<Long> shadowAccountIds = matchingRules.stream()
+                .map(rule -> shadowAccountIdByRule.get(rule))
+                .filter(id -> id != null)
+                .collect(Collectors.toSet());
+        
+        // Look up accounts from AccountCacheService (avoids lazy loading issues)
+        return shadowAccountIds.stream()
+                .map(accountCacheService::findById)
+                .filter(Optional::isPresent)
+                .map(Optional::get)
+                .filter(Account::getActive)
                 .collect(Collectors.toList());
     }
 
@@ -268,7 +295,7 @@ public class CopyRuleService {
     /**
      * Refresh the cache (call after rule changes).
      */
-    public void refreshCache() {
+    public synchronized void refreshCache() {
         loadRules();
     }
 }
