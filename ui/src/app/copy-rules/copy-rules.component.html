@@ -1,0 +1,70 @@
+<div class="copy-rules-container">
+  <div class="header">
+    <h1>Copy Rules</h1>
+    <div class="actions">
+      <label class="filter-toggle">
+        <input type="checkbox" [checked]="showActiveOnly" (change)="toggleActiveFilter()">
+        Show Active Only
+      </label>
+      <button (click)="onRefresh()" class="btn btn-secondary" title="Refresh list">Refresh</button>
+      <a routerLink="/copy-rules/new" class="btn btn-primary">Create New Rule</a>
+    </div>
+  </div>
+
+  <div *ngIf="error" class="error-message">
+    {{ error }}
+  </div>
+
+  <div *ngIf="loading" class="loading">
+    Loading copy rules...
+  </div>
+
+  <div *ngIf="!loading && copyRules.length === 0" class="empty-state">
+    <p>No copy rules found.</p>
+    <a routerLink="/copy-rules/new" class="btn btn-primary">Create Your First Copy Rule</a>
+  </div>
+
+  <table *ngIf="!loading && copyRules.length > 0" class="copy-rules-table">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Primary Account</th>
+        <th>Shadow Account</th>
+        <th>Ratio</th>
+        <th>Order Types</th>
+        <th>Copy Route</th>
+        <th>Locate Route</th>
+        <th>Copy Broker</th>
+        <th>Priority</th>
+        <th>Active</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr *ngFor="let rule of copyRules" [class.inactive]="!rule.active">
+        <td>{{ rule.id }}</td>
+        <td>{{ rule.primaryAccountNumber || rule.primaryAccountId }}</td>
+        <td>{{ rule.shadowAccountNumber || rule.shadowAccountId }}</td>
+        <td>{{ rule.ratioValue }} ({{ rule.ratioType }})</td>
+        <td>{{ rule.orderTypes || 'All' }}</td>
+        <td>{{ rule.copyRoute || '-' }}</td>
+        <td>{{ rule.locateRoute || '-' }}</td>
+        <td>{{ rule.copyBroker || '-' }}</td>
+        <td>{{ rule.priority }}</td>
+        <td>
+          <button 
+            class="btn-toggle" 
+            [class.active]="rule.active"
+            (click)="toggleActive(rule)">
+            {{ rule.active ? 'Active' : 'Inactive' }}
+          </button>
+        </td>
+        <td class="actions">
+          <a [routerLink]="['/copy-rules', rule.id, 'edit']" class="btn btn-sm btn-secondary" title="Edit this rule">Edit</a>
+          <button (click)="deleteCopyRule(rule.id!)" class="btn btn-sm btn-danger" title="Delete this rule">Delete</button>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+

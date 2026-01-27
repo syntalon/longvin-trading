@@ -3,14 +3,17 @@ package com.longvin.trading.executionReportHandler;
 import com.longvin.trading.dto.messages.ExecutionReportContext;
 import com.longvin.trading.entities.accounts.Account;
 import com.longvin.trading.entities.accounts.AccountType;
+import com.longvin.trading.entities.copy.CopyRule;
 import com.longvin.trading.fix.FixSessionRegistry;
 import com.longvin.trading.fixSender.FixMessageSender;
 import com.longvin.trading.service.AccountCacheService;
+import com.longvin.trading.service.CopyRuleService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import quickfix.SessionID;
 
+import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -21,7 +24,8 @@ import java.util.stream.Collectors;
  * Handler for new order ExecutionReports (ExecType=0, OrdStatus=0).
  * 
  * When a new order is confirmed:
- * - For stop limit orders: Copies the order to shadow accounts immediately
+ * - For stop market orders (OrdType='3'): Copies to shadow accounts (StopPx not required)
+ * - For stop limit orders (OrdType='4'): Not copied (StopPx not available in ExecutionReport)
  * - For other orders: Logs the confirmation. Order replication is handled by FillOrderHandler when orders are filled.
  */
 @Component
@@ -32,13 +36,16 @@ public class NewOrderHandler implements ExecutionReportHandler {
     private final AccountCacheService accountCacheService;
     private final FixSessionRegistry fixSessionRegistry;
     private final FixMessageSender fixMessageSender;
+    private final CopyRuleService copyRuleService;
     
     public NewOrderHandler(AccountCacheService accountCacheService,
                           FixSessionRegistry fixSessionRegistry,
-                          FixMessageSender fixMessageSender) {
+                          FixMessageSender fixMessageSender,
+                          CopyRuleService copyRuleService) {
         this.accountCacheService = accountCacheService;
         this.fixSessionRegistry = fixSessionRegistry;
         this.fixMessageSender = fixMessageSender;
+        this.copyRuleService = copyRuleService;
     }
 
     @Override
@@ -58,39 +65,47 @@ public class NewOrderHandler implements ExecutionReportHandler {
             return;
         }
         
-        // Check if this is a stop order (stop market OrdType='3' or stop limit OrdType='4') - if so, copy to shadow accounts
-        if (context.getOrdType() != null && (context.getOrdType() == '3' || context.getOrdType() == '4')) {
-            // Debug logging to check what fields are available
-            log.debug("Stop order detected - checking fields: ClOrdID={}, OrdType={}, Price={}, StopPx={}", 
-                    context.getClOrdID(), context.getOrdType(), context.getPrice(), context.getStopPx());
+        // Handle stop market orders (OrdType='3') - copy to shadow accounts
+        // Stop market orders don't require StopPx, so we can copy them
+        if (context.getOrdType() != null && context.getOrdType() == '3') {
             // Get account to check if it's a primary account
             if (context.getAccount() != null) {
                 Optional<Account> accountOpt = accountCacheService.findByAccountNumber(context.getAccount());
                 if (accountOpt.isPresent() && accountOpt.get().getAccountType() == AccountType.PRIMARY) {
-                    String ordTypeName = context.getOrdType() == '3' ? "STOP(3)" : "STOP_LIMIT(4)";
-                    log.info("Stop order confirmed - copying to shadow accounts. ClOrdID={}, OrderID={}, Symbol={}, Side={}, Qty={}, OrdType={}",
+                    log.info("Stop market order confirmed - copying to shadow accounts. ClOrdID={}, OrderID={}, Symbol={}, Side={}, Qty={}",
                             context.getClOrdID(), context.getOrderID(), context.getSymbol(),
-                            context.getSide(), context.getOrderQty(), ordTypeName);
-                    copyStopOrderToShadowAccounts(context);
+                            context.getSide(), context.getOrderQty());
+                    copyStopMarketOrderToShadowAccounts(context);
                 } else {
-                    log.debug("Skipping stop order copy - not a primary account. ClOrdID={}, Account={}", 
+                    log.debug("Skipping stop market order copy - not a primary account. ClOrdID={}, Account={}", 
                             context.getClOrdID(), context.getAccount());
                 }
             } else {
-                log.warn("Cannot copy stop order - Account field missing in ExecutionReport. ClOrdID={}", 
+                log.warn("Cannot copy stop market order - Account field missing in ExecutionReport. ClOrdID={}", 
                         context.getClOrdID());
             }
+            return;
+        }
+        
+        // Skip stop limit orders (OrdType='4') - StopPx is not available in ExecutionReport
+        if (context.getOrdType() != null && context.getOrdType() == '4') {
+            log.info("Stop limit order confirmed - NOT copying to shadow accounts (StopPx not available in ExecutionReport). " +
+                    "ClOrdID={}, OrderID={}, Symbol={}, Side={}, Qty={}",
+                    context.getClOrdID(), context.getOrderID(), context.getSymbol(),
+                    context.getSide(), context.getOrderQty());
+            return;
         }
     }
     
     /**
-     * Copy stop order (stop market or stop limit) to shadow accounts.
+     * Copy stop market order to shadow accounts.
+     * Stop market orders don't require StopPx, so we can copy them without it.
      */
-    private void copyStopOrderToShadowAccounts(ExecutionReportContext context) {
+    private void copyStopMarketOrderToShadowAccounts(ExecutionReportContext context) {
         // Get initiator session for sending orders
         Optional<SessionID> initiatorSessionOpt = fixSessionRegistry.findAnyLoggedOnInitiator();
         if (initiatorSessionOpt.isEmpty()) {
-            log.warn("No logged-on initiator session found, cannot copy stop order to shadow accounts. ClOrdID={}, Account: {}",
+            log.warn("No logged-on initiator session found, cannot copy stop market order to shadow accounts. ClOrdID={}, Account: {}",
                     context.getClOrdID(), context.getAccount());
             return;
         }
@@ -98,48 +113,124 @@ public class NewOrderHandler implements ExecutionReportHandler {
         
         // Get primary account to filter shadow accounts by strategy_key
         if (context.getAccount() == null) {
-            log.warn("Account field missing in ExecutionReport, cannot copy stop order. ClOrdID={}", 
+            log.warn("Account field missing in ExecutionReport, cannot copy stop market order. ClOrdID={}", 
                     context.getClOrdID());
             return;
         }
         
         Optional<Account> primaryAccountOpt = accountCacheService.findByAccountNumber(context.getAccount());
         if (primaryAccountOpt.isEmpty()) {
-            log.warn("Primary account not found for account number: {}, cannot copy stop order. ClOrdID={}", 
+            log.warn("Primary account not found for account number: {}, cannot copy stop market order. ClOrdID={}", 
                     context.getAccount(), context.getClOrdID());
             return;
         }
         
         Account primaryAccount = primaryAccountOpt.get();
         
-        // Get shadow accounts with same strategy_key as primary account
-        List<Account> shadowAccounts = accountCacheService.findActiveShadowAccountsByStrategyKey(primaryAccount);
-        String ordTypeName = context.getOrdType() == '3' ? "STOP(3)" : "STOP_LIMIT(4)";
-        log.info("Found {} shadow account(s) for stop order copy: StrategyKey={}, PrimaryAccount={}, PrimaryAccountId={}, OrdType={}, ShadowAccounts={}",
-                shadowAccounts.size(), primaryAccount.getStrategyKey(), primaryAccount.getAccountNumber(), primaryAccount.getId(),
-                ordTypeName, shadowAccounts.stream().map(Account::getAccountNumber).collect(Collectors.toList()));
+        // Get shadow accounts that match copy rules
+        Character ordType = context.getOrdType();
+        String symbol = context.getSymbol();
+        BigDecimal quantity = context.getOrderQty();
+        
+        List<Account> shadowAccounts = copyRuleService.getShadowAccountsForCopy(
+                primaryAccount, ordType, symbol, quantity);
+        
+        log.info("Found {} shadow account(s) for stop market order copy via copy rules: PrimaryAccount={}, PrimaryAccountId={}, OrdType={}, Symbol={}, Qty={}, ShadowAccounts={}",
+                shadowAccounts.size(), primaryAccount.getAccountNumber(), primaryAccount.getId(), ordType, symbol, quantity,
+                shadowAccounts.stream().map(Account::getAccountNumber).collect(Collectors.toList()));
+        
         if (shadowAccounts.isEmpty()) {
-            log.warn("No shadow accounts found with same strategy_key ({}), cannot copy stop order. ClOrdID={}, AccountId: {}",
-                    primaryAccount.getStrategyKey(), context.getClOrdID(), primaryAccount.getId());
+            log.warn("No shadow accounts found matching copy rules, cannot copy stop market order. ClOrdID={}, AccountId: {}, OrdType={}, Symbol={}, Qty={}",
+                    context.getClOrdID(), primaryAccount.getId(), ordType, symbol, quantity);
             return;
         }
         
-        // Send stop order to each shadow account
+        // Send stop market order to each shadow account using copy rules
         for (Account shadowAccount : shadowAccounts) {
             try {
-                sendStopOrderToShadowAccount(context, shadowAccount, primaryAccount, initiatorSessionID);
+                // Get copy rule for this account pair
+                Optional<CopyRule> ruleOpt = copyRuleService.getRuleForAccountPair(
+                        primaryAccount, shadowAccount, ordType, symbol, quantity);
+                
+                if (ruleOpt.isPresent()) {
+                    CopyRule rule = ruleOpt.get();
+                    sendStopMarketOrderToShadowAccountWithRule(context, shadowAccount, primaryAccount, rule, initiatorSessionID);
+                } else {
+                    // Fallback: send without rule
+                    log.warn("No copy rule found for account pair, using default behavior. PrimaryAccount={}, ShadowAccount={}",
+                            primaryAccount.getAccountNumber(), shadowAccount.getAccountNumber());
+                    sendStopMarketOrderToShadowAccount(context, shadowAccount, primaryAccount, initiatorSessionID);
+                }
             } catch (Exception e) {
-                log.error("Error copying stop order to shadow account {} (AccountId: {}): {}", 
+                log.error("Error copying stop market order to shadow account {} (AccountId: {}): {}", 
                         shadowAccount.getAccountNumber(), shadowAccount.getId(), e.getMessage(), e);
             }
         }
     }
     
     /**
-     * Send stop order (stop market or stop limit) to a shadow account.
+     * Send stop market order to a shadow account using copy rule.
      */
-    private void sendStopOrderToShadowAccount(ExecutionReportContext context, Account shadowAccount, 
-                                              Account primaryAccount, SessionID initiatorSessionID) {
+    private void sendStopMarketOrderToShadowAccountWithRule(ExecutionReportContext context, Account shadowAccount, 
+                                                           Account primaryAccount, CopyRule rule, SessionID initiatorSessionID) {
+        String shadowAccountNumber = shadowAccount.getAccountNumber();
+        String clOrdId = "COPY-" + shadowAccountNumber + "-" + context.getClOrdID();
+        
+        // Calculate copy quantity based on rule
+        BigDecimal primaryQty = context.getOrderQty();
+        BigDecimal copyQty = copyRuleService.calculateCopyQuantity(rule, primaryQty);
+        
+        // Get original route from context
+        String originalRoute = context.getExDestination();
+        
+        // Get copy route from copy rule (not locate route for stop orders)
+        String targetRoute = copyRuleService.getCopyRoute(rule, originalRoute);
+        
+        // Build order parameters
+        Map<String, Object> orderParams = new HashMap<>();
+        orderParams.put("clOrdID", clOrdId);
+        orderParams.put("side", context.getSide());
+        orderParams.put("symbol", context.getSymbol());
+        orderParams.put("orderQty", copyQty.intValue());
+        orderParams.put("account", shadowAccountNumber);
+        orderParams.put("ordType", '3'); // STOP market order
+        
+        // TimeInForce - use from context if available, otherwise default to DAY
+        Character timeInForce = context.getTimeInForce();
+        if (timeInForce == null) {
+            timeInForce = '0'; // Default to DAY if not available
+        }
+        orderParams.put("timeInForce", timeInForce);
+        
+        // Stop market orders don't require StopPx - they trigger at market price when stop condition is met
+        if (context.getStopPx() != null) {
+            orderParams.put("stopPx", context.getStopPx().doubleValue());
+        }
+        
+        // Set route from copy rule
+        if (targetRoute != null && !targetRoute.isBlank()) {
+            orderParams.put("exDestination", targetRoute);
+        }
+        
+        Long primaryAccountId = primaryAccount.getId();
+        log.info("Sending stop market order copy with rule: ClOrdID={}, PrimaryAccountId={}, ShadowAccount={}, ShadowAccountId={}, " +
+                "PrimaryQty={}, CopyQty={}, OriginalRoute={}, TargetRoute={}, RuleId={}",
+                clOrdId, primaryAccountId, shadowAccountNumber, shadowAccount.getId(), 
+                primaryQty, copyQty, originalRoute, targetRoute, rule.getId());
+        
+        // Send order
+        fixMessageSender.sendNewOrderSingle(initiatorSessionID, orderParams);
+        
+        log.info("Stop market order copy sent with rule: ClOrdID={}, PrimaryAccountId={}, ShadowAccount={}, ShadowAccountId={}, " +
+                "CopyQty={}, TargetRoute={}",
+                clOrdId, primaryAccountId, shadowAccountNumber, shadowAccount.getId(), copyQty, targetRoute);
+    }
+
+    /**
+     * Send stop market order to a shadow account (fallback method without copy rule).
+     */
+    private void sendStopMarketOrderToShadowAccount(ExecutionReportContext context, Account shadowAccount, 
+                                                    Account primaryAccount, SessionID initiatorSessionID) {
         String shadowAccountNumber = shadowAccount.getAccountNumber();
         String clOrdId = "COPY-" + shadowAccountNumber + "-" + context.getClOrdID();
         
@@ -150,37 +241,19 @@ public class NewOrderHandler implements ExecutionReportHandler {
         orderParams.put("symbol", context.getSymbol());
         orderParams.put("orderQty", context.getOrderQty().intValue());
         orderParams.put("account", shadowAccountNumber);
-        orderParams.put("ordType", context.getOrdType()); // '3' for STOP, '4' for STOP_LIMIT
+        orderParams.put("ordType", '3'); // STOP market order
         
         // TimeInForce - use from context if available, otherwise default to DAY
-        // Parent order might have TimeInForce=5 (Day+), we should copy it to maintain same behavior
         Character timeInForce = context.getTimeInForce();
         if (timeInForce == null) {
             timeInForce = '0'; // Default to DAY if not available
-            log.debug("TimeInForce not in ExecutionReport, using default DAY(0) for ClOrdID={}", context.getClOrdID());
         }
         orderParams.put("timeInForce", timeInForce);
         
-        // Set price for stop limit orders (OrdType='4')
-        if (context.getOrdType() == '4' && context.getPrice() != null) {
-            orderParams.put("price", context.getPrice().doubleValue());
+        // Stop market orders don't require StopPx
+        if (context.getStopPx() != null) {
+            orderParams.put("stopPx", context.getStopPx().doubleValue());
         }
-        
-        // Set stop price for stop orders (required for both STOP and STOP_LIMIT orders)
-        // NOTE: DAS Trader's ExecutionReport for new order confirmation may not include StopPx (tag 99).
-        // If StopPx is missing, we cannot copy the order as it's required for stop orders.
-        java.math.BigDecimal stopPx = context.getStopPx();
-        if (stopPx == null) {
-            // StopPx is required for STOP and STOP_LIMIT orders
-            String ordTypeName = context.getOrdType() == '3' ? "STOP(3)" : "STOP_LIMIT(4)";
-            log.error("Cannot copy stop order to shadow account {} - StopPx (tag 99) is missing in ExecutionReport. " +
-                    "ClOrdID={}, Symbol={}, OrdType={}, Price={}. StopPx is required for stop orders but is not present in the ExecutionReport message. " +
-                    "Please verify that DAS Trader sends StopPx in ExecutionReport for stop orders.",
-                    shadowAccountNumber, context.getClOrdID(), context.getSymbol(), ordTypeName, context.getPrice());
-            throw new IllegalArgumentException("StopPx (tag 99) is required for stop orders but is missing in ExecutionReport for ClOrdID=" + context.getClOrdID());
-        }
-        
-        orderParams.put("stopPx", stopPx.doubleValue());
         
         // Use the same route (exDestination) as the primary account order
         String route = context.getExDestination();
@@ -189,17 +262,15 @@ public class NewOrderHandler implements ExecutionReportHandler {
         }
         
         Long primaryAccountId = primaryAccount.getId();
-        String routeInfo = route != null ? ", Route=" + route : "";
-        String ordTypeName = context.getOrdType() == '3' ? "STOP(3)" : "STOP_LIMIT(4)";
-        log.info("Sending stop order copy to shadow account {} (AccountId: {}): ClOrdID={}, PrimaryAccountId: {}, Symbol={}, Side={}, Qty={}, OrdType={}, Price={}, StopPx={}{}",
+        log.info("Sending stop market order copy to shadow account {} (AccountId: {}): ClOrdID={}, PrimaryAccountId: {}, Symbol={}, Side={}, Qty={}",
                 shadowAccountNumber, shadowAccount.getId(), clOrdId, primaryAccountId, context.getSymbol(),
-                context.getSide(), context.getOrderQty(), ordTypeName, context.getPrice(), context.getStopPx(), routeInfo);
+                context.getSide(), context.getOrderQty());
         
         // Send order
         fixMessageSender.sendNewOrderSingle(initiatorSessionID, orderParams);
         
-        log.info("Stop order copy sent to shadow account {} (AccountId: {}): ClOrdID={}, PrimaryAccountId: {}, Symbol={}, Side={}, Qty={}, OrdType={}{}",
+        log.info("Stop market order copy sent to shadow account {} (AccountId: {}): ClOrdID={}, PrimaryAccountId: {}, Symbol={}, Side={}, Qty={}",
                 shadowAccountNumber, shadowAccount.getId(), clOrdId, primaryAccountId,
-                context.getSymbol(), context.getSide(), context.getOrderQty(), ordTypeName, routeInfo);
+                context.getSymbol(), context.getSide(), context.getOrderQty());
     }
 }

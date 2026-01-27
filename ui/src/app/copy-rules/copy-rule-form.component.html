@@ -1,0 +1,181 @@
+<div class="copy-rule-form-container">
+  <div class="header">
+    <div>
+      <a routerLink="/copy-rules" class="back-link">← Back to List</a>
+      <h1>{{ isEditMode ? 'Edit Copy Rule' : 'Create Copy Rule' }}</h1>
+    </div>
+  </div>
+
+  <div *ngIf="error" class="error-message">
+    {{ error }}
+  </div>
+
+  <div *ngIf="loading" class="loading">
+    Loading copy rule...
+  </div>
+
+  <form *ngIf="!loading" (ngSubmit)="save()" class="copy-rule-form">
+    <div class="form-group">
+      <label for="primaryAccountNumber">Primary Account Number *</label>
+      <input 
+        type="text" 
+        id="primaryAccountNumber" 
+        [(ngModel)]="rule.primaryAccountNumber" 
+        name="primaryAccountNumber"
+        [disabled]="isEditMode"
+        placeholder="e.g., TROS107"
+        required>
+    </div>
+
+    <div class="form-group">
+      <label for="shadowAccountNumber">Shadow Account Number *</label>
+      <input 
+        type="text" 
+        id="shadowAccountNumber" 
+        [(ngModel)]="rule.shadowAccountNumber" 
+        name="shadowAccountNumber"
+        [disabled]="isEditMode"
+        placeholder="e.g., TRDAS83"
+        required>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="ratioType">Ratio Type *</label>
+        <select id="ratioType" [(ngModel)]="rule.ratioType" name="ratioType" required>
+          <option *ngFor="let type of ratioTypes" [value]="type">{{ type }}</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="ratioValue">Ratio Value *</label>
+        <input 
+          type="number" 
+          id="ratioValue" 
+          [(ngModel)]="rule.ratioValue" 
+          name="ratioValue"
+          step="0.01"
+          min="0.01"
+          required>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="orderTypes">Order Types (comma-separated, e.g., "1,2,3")</label>
+      <input 
+        type="text" 
+        id="orderTypes" 
+        [(ngModel)]="rule.orderTypes" 
+        name="orderTypes"
+        placeholder="Leave empty for all order types">
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="copyRoute">Copy Route</label>
+        <input 
+          type="text" 
+          id="copyRoute" 
+          [(ngModel)]="rule.copyRoute" 
+          name="copyRoute"
+          placeholder="e.g., NYSE, NASDAQ">
+      </div>
+
+      <div class="form-group">
+        <label for="locateRoute">Locate Route</label>
+        <input 
+          type="text" 
+          id="locateRoute" 
+          [(ngModel)]="rule.locateRoute" 
+          name="locateRoute"
+          placeholder="e.g., LOCATE, TESTSL">
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="copyBroker">Copy Broker</label>
+      <input 
+        type="text" 
+        id="copyBroker" 
+        [(ngModel)]="rule.copyBroker" 
+        name="copyBroker"
+        placeholder="e.g., OPAL, DAST">
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="minQuantity">Min Quantity</label>
+        <input 
+          type="number" 
+          id="minQuantity" 
+          [(ngModel)]="rule.minQuantity" 
+          name="minQuantity"
+          step="0.01"
+          min="0">
+      </div>
+
+      <div class="form-group">
+        <label for="maxQuantity">Max Quantity</label>
+        <input 
+          type="number" 
+          id="maxQuantity" 
+          [(ngModel)]="rule.maxQuantity" 
+          name="maxQuantity"
+          step="0.01"
+          min="0">
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="priority">Priority</label>
+        <input 
+          type="number" 
+          id="priority" 
+          [(ngModel)]="rule.priority" 
+          name="priority"
+          min="0">
+      </div>
+
+      <div class="form-group">
+        <label for="active">
+          <input 
+            type="checkbox" 
+            id="active" 
+            [(ngModel)]="rule.active" 
+            name="active">
+          Active
+        </label>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="description">Description</label>
+      <textarea 
+        id="description" 
+        [(ngModel)]="rule.description" 
+        name="description"
+        rows="3"
+        placeholder="Optional description"></textarea>
+    </div>
+
+    <div class="form-group">
+      <label for="config">Config (JSON)</label>
+      <textarea 
+        id="config" 
+        [(ngModel)]="configJson" 
+        name="config"
+        rows="6"
+        placeholder='Optional JSON configuration, e.g., {"key1": "value1", "key2": 123}'></textarea>
+      <small class="form-hint">Enter valid JSON format. Leave empty if not needed.</small>
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary" [disabled]="saving">
+        {{ saving ? 'Saving...' : (isEditMode ? 'Update' : 'Create') }}
+      </button>
+      <button type="button" (click)="cancel()" class="btn btn-secondary">Cancel</button>
+    </div>
+  </form>
+</div>
+

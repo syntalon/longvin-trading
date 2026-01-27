@@ -1,7 +1,7 @@
 package com.longvin.trading.executionReportHandler;
 
 import com.longvin.trading.dto.messages.ExecutionReportContext;
-import com.longvin.trading.service.LocateRouteService;
+import com.longvin.trading.service.RouteService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -20,10 +20,10 @@ public class RejectedOrderHandler implements ExecutionReportHandler {
     
     private static final Logger log = LoggerFactory.getLogger(RejectedOrderHandler.class);
     
-    private final LocateRouteService locateRouteService;
+    private final RouteService routeService;
 
-    public RejectedOrderHandler(LocateRouteService locateRouteService) {
-        this.locateRouteService = locateRouteService;
+    public RejectedOrderHandler(RouteService routeService) {
+        this.routeService = routeService;
     }
 
     @Override
@@ -76,7 +76,7 @@ public class RejectedOrderHandler implements ExecutionReportHandler {
                 context.getClOrdID(), context.getText());
 
         // Log rejection details but do not send new orders
-        String alternativeRoute = locateRouteService.getAvailableLocateRoute(context.getSymbol());
+        String alternativeRoute = routeService.getAvailableLocateRoute(context.getSymbol());
         if (alternativeRoute != null && !alternativeRoute.isBlank()) {
             log.info("Alternative route available but not retrying. ClOrdID={}, Symbol={}, AlternativeRoute={}",
                     context.getClOrdID(), context.getSymbol(), alternativeRoute);

@@ -7,13 +7,17 @@ import com.longvin.trading.entities.orders.Order;
 import com.longvin.trading.fix.FixSessionRegistry;
 import com.longvin.trading.fixSender.FixMessageSender;
 import com.longvin.trading.repository.OrderRepository;
+import com.longvin.trading.entities.copy.CopyRule;
+import com.longvin.trading.entities.accounts.Route;
 import com.longvin.trading.service.AccountCacheService;
-import com.longvin.trading.service.LocateRouteService;
+import com.longvin.trading.service.CopyRuleService;
+import com.longvin.trading.service.RouteService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import quickfix.SessionID;
 
+import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -40,18 +44,21 @@ public class FillOrderHandler implements ExecutionReportHandler {
     private final AccountCacheService accountCacheService;
     private final FixMessageSender fixMessageSender;
     private final FixSessionRegistry fixSessionRegistry;
-    private final LocateRouteService locateRouteService;
+    private final RouteService routeService;
+    private final CopyRuleService copyRuleService;
 
     public FillOrderHandler(OrderRepository orderRepository,
                            AccountCacheService accountCacheService,
                            FixMessageSender fixMessageSender,
                            FixSessionRegistry fixSessionRegistry,
-                           LocateRouteService locateRouteService) {
+                           RouteService routeService,
+                           CopyRuleService copyRuleService) {
         this.orderRepository = orderRepository;
         this.accountCacheService = accountCacheService;
         this.fixMessageSender = fixMessageSender;
         this.fixSessionRegistry = fixSessionRegistry;
-        this.locateRouteService = locateRouteService;
+        this.routeService = routeService;
+        this.copyRuleService = copyRuleService;
     }
 
     @Override
@@ -172,21 +179,40 @@ public class FillOrderHandler implements ExecutionReportHandler {
             return;
         }
 
-        // Get shadow accounts with same strategy_key as primary account
-        List<Account> shadowAccounts = accountCacheService.findActiveShadowAccountsByStrategyKey(primaryAccount);
-        log.info("Found {} shadow account(s) for short order replication: StrategyKey={}, PrimaryAccount={}, PrimaryAccountId={}, ShadowAccounts={}",
-                shadowAccounts.size(), primaryAccount.getStrategyKey(), primaryAccount.getAccountNumber(), primaryAccountId,
+        // Get shadow accounts that match copy rules
+        Character ordType = order.getOrdType();
+        String symbol = context.getSymbol();
+        BigDecimal quantity = context.getOrderQty();
+        
+        List<Account> shadowAccounts = copyRuleService.getShadowAccountsForCopy(
+                primaryAccount, ordType, symbol, quantity);
+        
+        log.info("Found {} shadow account(s) for short order replication via copy rules: PrimaryAccount={}, PrimaryAccountId={}, OrdType={}, Symbol={}, Qty={}, ShadowAccounts={}",
+                shadowAccounts.size(), primaryAccount.getAccountNumber(), primaryAccountId, ordType, symbol, quantity,
                 shadowAccounts.stream().map(Account::getAccountNumber).collect(Collectors.toList()));
+        
         if (shadowAccounts.isEmpty()) {
-            log.warn("No shadow accounts found with same strategy_key ({}), cannot replicate short order. ClOrdID={}, AccountId: {}",
-                    primaryAccount.getStrategyKey(), context.getClOrdID(), primaryAccountId);
+            log.warn("No shadow accounts found matching copy rules, cannot replicate short order. ClOrdID={}, AccountId: {}, OrdType={}, Symbol={}, Qty={}",
+                    context.getClOrdID(), primaryAccountId, ordType, symbol, quantity);
             return;
         }
 
-        // Send orders to each shadow account
+        // Send orders to each shadow account using copy rules
         for (Account shadowAccount : shadowAccounts) {
             try {
-                sendOrderToShadowAccount(context, order, shadowAccount, initiatorSessionID);
+                // Get copy rule for this account pair
+                Optional<CopyRule> ruleOpt = copyRuleService.getRuleForAccountPair(
+                        primaryAccount, shadowAccount, ordType, symbol, quantity);
+                
+                if (ruleOpt.isPresent()) {
+                    CopyRule rule = ruleOpt.get();
+                    sendOrderToShadowAccountWithRule(context, order, shadowAccount, rule, initiatorSessionID);
+                } else {
+                    // Fallback: send without rule
+                    log.warn("No copy rule found for account pair, using default behavior. PrimaryAccount={}, ShadowAccount={}",
+                            primaryAccount.getAccountNumber(), shadowAccount.getAccountNumber());
+                    sendOrderToShadowAccount(context, order, shadowAccount, initiatorSessionID);
+                }
             } catch (Exception e) {
                 log.error("Error replicating short order to shadow account {} (AccountId: {}): {}", 
                         shadowAccount.getAccountNumber(), shadowAccount.getId(), e.getMessage(), e);
@@ -279,7 +305,7 @@ public class FillOrderHandler implements ExecutionReportHandler {
      * Check if this is a locate order (Short Locate New Order).
      * A locate order is identified by:
      * - Side=BUY (1)
-     * - ExDestination is a locate route (configured in LocateRouteService)
+     * - ExDestination is a locate route (has routeType set in routes table)
      * 
      * Note: ClOrdID prefix "LOC-" is also a valid indicator, but the above criteria
      * are more reliable as they match the actual order characteristics.
@@ -293,7 +319,7 @@ public class FillOrderHandler implements ExecutionReportHandler {
         // Check if ExDestination is a locate route
         String exDestination = context.getExDestination();
         if (exDestination != null && !exDestination.isBlank()) {
-            if (locateRouteService.isLocateRoute(exDestination)) {
+            if (routeService.isLocateRoute(exDestination)) {
                 return true;
             }
         }
@@ -330,16 +356,15 @@ public class FillOrderHandler implements ExecutionReportHandler {
         Long primaryAccountId = order != null && order.getAccount() != null ? order.getAccount().getId() : null;
         String locateRoute = context.getExDestination();
         
-        // Get route type using LocateRouteService
-        Optional<LocateRouteService.LocateRouteInfo> routeInfoOpt = locateRouteService.getLocateRouteInfo(locateRoute);
-        if (routeInfoOpt.isEmpty()) {
+        // Get route type using RouteService
+        Optional<Route.LocateRouteType> routeTypeOpt = routeService.getRouteType(locateRoute);
+        if (routeTypeOpt.isEmpty()) {
             log.warn("Route {} is not a locate route, cannot process locate replication. ClOrdID={}, AccountId: {}",
                     locateRoute, context.getClOrdID(), primaryAccountId);
             return;
         }
         
-        LocateRouteService.LocateRouteInfo routeInfo = routeInfoOpt.get();
-        LocateRouteService.LocateRouteType routeType = routeInfo.getType();
+        Route.LocateRouteType routeType = routeTypeOpt.get();
         
         log.info("Processing locate order replication on fill: ClOrdID={}, Account: {}, AccountId: {}, Symbol={}, Qty={}, LocateRoute={}, RouteType={}",
                 context.getClOrdID(), context.getAccount(), primaryAccountId, context.getSymbol(), 
@@ -368,38 +393,65 @@ public class FillOrderHandler implements ExecutionReportHandler {
             return;
         }
 
-        // Get shadow accounts with same strategy_key as primary account
-        List<Account> shadowAccounts = accountCacheService.findActiveShadowAccountsByStrategyKey(primaryAccount);
-        log.info("Found {} shadow account(s) for locate order replication: StrategyKey={}, PrimaryAccount={}, PrimaryAccountId={}, ShadowAccounts={}",
-                shadowAccounts.size(), primaryAccount.getStrategyKey(), primaryAccount.getAccountNumber(), primaryAccountId,
+        // Get shadow accounts that match copy rules
+        Character ordType = order.getOrdType();
+        String symbol = context.getSymbol();
+        BigDecimal quantity = context.getOrderQty();
+        
+        List<Account> shadowAccounts = copyRuleService.getShadowAccountsForCopy(
+                primaryAccount, ordType, symbol, quantity);
+        
+        log.info("Found {} shadow account(s) for locate order replication via copy rules: PrimaryAccount={}, PrimaryAccountId={}, OrdType={}, Symbol={}, Qty={}, ShadowAccounts={}",
+                shadowAccounts.size(), primaryAccount.getAccountNumber(), primaryAccountId, ordType, symbol, quantity,
                 shadowAccounts.stream().map(Account::getAccountNumber).collect(Collectors.toList()));
+        
         if (shadowAccounts.isEmpty()) {
-            log.warn("No shadow accounts found with same strategy_key ({}), cannot replicate locate order. ClOrdID={}, AccountId: {}",
-                    primaryAccount.getStrategyKey(), context.getClOrdID(), primaryAccountId);
+            log.warn("No shadow accounts found matching copy rules, cannot replicate locate order. ClOrdID={}, AccountId: {}, OrdType={}, Symbol={}, Qty={}",
+                    context.getClOrdID(), primaryAccountId, ordType, symbol, quantity);
             return;
         }
 
         // Process based on route type
         // Type 0: Send Short Locate Quote Request (3.11) → Receive Quote Response (3.12) → Send locate order (3.14)
         // Type 1: Send locate order (3.14) directly → Returns offer (OrdStatus=B) → Accept/reject → Fills
-        if (routeType == LocateRouteService.LocateRouteType.TYPE_0) {
+        if (routeType == Route.LocateRouteType.TYPE_0) {
             // Type 0: Send Short Locate Quote Request (3.11) for each shadow account
             // LocateResponseHandler will receive the response (3.12) and send the locate order (3.14)
             log.info("Type 0 route detected, sending Short Locate Quote Request (3.11) for each shadow account");
             for (Account shadowAccount : shadowAccounts) {
                 try {
-                    sendShortLocateQuoteRequestForShadowAccount(context, order, shadowAccount, initiatorSessionID);
+                    // Get copy rule for this account pair to get the locate route
+                    Optional<CopyRule> ruleOpt = copyRuleService.getRuleForAccountPair(
+                            primaryAccount, shadowAccount, ordType, symbol, quantity);
+                    
+                    String originalRoute = context.getExDestination();
+                    String targetLocateRoute = copyRuleService.getLocateRoute(
+                            ruleOpt.orElse(null), originalRoute);
+                    
+                    sendShortLocateQuoteRequestForShadowAccount(context, order, shadowAccount, targetLocateRoute, initiatorSessionID);
                 } catch (Exception e) {
                     log.error("Error sending Short Locate Quote Request to shadow account {} (AccountId: {}): {}", 
                             shadowAccount.getAccountNumber(), shadowAccount.getId(), e.getMessage(), e);
                 }
             }
-        } else if (routeType == LocateRouteService.LocateRouteType.TYPE_1) {
+        } else if (routeType == Route.LocateRouteType.TYPE_1) {
             // Type 1: Send locate order (section 3.14) directly for each shadow account
             log.info("Type 1 route detected, sending locate order (3.14) directly for each shadow account");
             for (Account shadowAccount : shadowAccounts) {
                 try {
-                    sendLocateOrderToShadowAccount(context, order, shadowAccount, initiatorSessionID);
+                    // Get copy rule for this account pair
+                    Optional<CopyRule> ruleOpt = copyRuleService.getRuleForAccountPair(
+                            primaryAccount, shadowAccount, ordType, symbol, quantity);
+                    
+                    if (ruleOpt.isPresent()) {
+                        CopyRule rule = ruleOpt.get();
+                        sendLocateOrderToShadowAccountWithRule(context, order, shadowAccount, rule, initiatorSessionID);
+                    } else {
+                        // Fallback: send without rule
+                        log.warn("No copy rule found for account pair, using default behavior. PrimaryAccount={}, ShadowAccount={}",
+                                primaryAccount.getAccountNumber(), shadowAccount.getAccountNumber());
+                        sendLocateOrderToShadowAccount(context, order, shadowAccount, initiatorSessionID);
+                    }
                 } catch (Exception e) {
                     log.error("Error sending locate order to shadow account {} (AccountId: {}): {}", 
                             shadowAccount.getAccountNumber(), shadowAccount.getId(), e.getMessage(), e);
@@ -418,9 +470,8 @@ public class FillOrderHandler implements ExecutionReportHandler {
      * This format allows LocateResponseHandler to identify which shadow account to send the locate order to.
      */
     private void sendShortLocateQuoteRequestForShadowAccount(ExecutionReportContext context, Order primaryOrder,
-                                                             Account shadowAccount, SessionID initiatorSessionID) {
+                                                             Account shadowAccount, String locateRoute, SessionID initiatorSessionID) {
         String shadowAccountNumber = shadowAccount.getAccountNumber();
-        String locateRoute = context.getExDestination();
         String primaryClOrdId = context.getClOrdID();
         
         // Generate QuoteReqID in format: QL_{shadowAccount}_{primaryClOrdId}_{route}_{timestamp}
@@ -451,8 +502,62 @@ public class FillOrderHandler implements ExecutionReportHandler {
     }
 
     /**
-     * Send locate order to a shadow account.
-     * A locate order is a BUY order with ExDestination set to the locate route.
+     * Send locate order to a shadow account using copy rule.
+     */
+    private void sendLocateOrderToShadowAccountWithRule(ExecutionReportContext context, Order primaryOrder,
+                                                       Account shadowAccount, CopyRule rule, SessionID initiatorSessionID) {
+        String shadowAccountNumber = shadowAccount.getAccountNumber();
+        String clOrdId = generateShadowClOrdId(context.getClOrdID(), shadowAccountNumber);
+        
+        // Calculate copy quantity based on rule
+        BigDecimal primaryQty = context.getOrderQty();
+        BigDecimal copyQty = copyRuleService.calculateCopyQuantity(rule, primaryQty);
+        
+        // Get original route from context or order
+        String originalRoute = context.getExDestination();
+        if (originalRoute == null || originalRoute.isBlank()) {
+            originalRoute = primaryOrder.getExDestination();
+        }
+        
+        // Get locate route from copy rule
+        String locateRoute = copyRuleService.getLocateRoute(rule, originalRoute);
+        
+        // Build order parameters for locate order
+        Map<String, Object> orderParams = new HashMap<>();
+        orderParams.put("clOrdID", clOrdId);
+        orderParams.put("side", '1'); // BUY for locate orders
+        orderParams.put("symbol", context.getSymbol());
+        orderParams.put("orderQty", copyQty.intValue());
+        orderParams.put("account", shadowAccountNumber);
+        orderParams.put("exDestination", locateRoute); // Locate route from copy rule
+        
+        // Set order type (default to MARKET if not available)
+        char ordType = primaryOrder.getOrdType() != null ? primaryOrder.getOrdType() : '1'; // MARKET
+        orderParams.put("ordType", ordType);
+        
+        // Set time in force
+        Character timeInForce = context.getTimeInForce();
+        if (timeInForce == null) {
+            timeInForce = primaryOrder.getTimeInForce() != null ? primaryOrder.getTimeInForce() : '0'; // Default to DAY
+        }
+        orderParams.put("timeInForce", timeInForce);
+
+        Long primaryAccountId = primaryOrder != null && primaryOrder.getAccount() != null ? 
+                primaryOrder.getAccount().getId() : null;
+        log.info("Sending locate-only order with rule: ClOrdID={}, PrimaryAccountId={}, ShadowAccount={}, ShadowAccountId={}, " +
+                "PrimaryQty={}, CopyQty={}, OriginalRoute={}, LocateRoute={}, RuleId={}",
+                clOrdId, primaryAccountId, shadowAccountNumber, shadowAccount.getId(), 
+                primaryQty, copyQty, originalRoute, locateRoute, rule.getId());
+        
+        fixMessageSender.sendNewOrderSingle(initiatorSessionID, orderParams);
+        
+        log.info("Locate order (3.14) sent with rule: ClOrdID={}, PrimaryAccountId={}, ShadowAccount={}, ShadowAccountId={}, " +
+                "CopyQty={}, LocateRoute={}",
+                clOrdId, primaryAccountId, shadowAccountNumber, shadowAccount.getId(), copyQty, locateRoute);
+    }
+
+    /**
+     * Send locate order to a shadow account (fallback method without copy rule).
      */
     private void sendLocateOrderToShadowAccount(ExecutionReportContext context, Order primaryOrder,
                                                Account shadowAccount, SessionID initiatorSessionID) {
@@ -472,19 +577,13 @@ public class FillOrderHandler implements ExecutionReportHandler {
         char ordType = primaryOrder.getOrdType() != null ? primaryOrder.getOrdType() : '1'; // MARKET
         orderParams.put("ordType", ordType);
         
-        // Set time in force - use from context first, then order entity, then default to DAY
-        // Parent order might have TimeInForce=5 (Day+), we should copy it to maintain same behavior
+        // Set time in force
         Character timeInForce = context.getTimeInForce();
         if (timeInForce == null) {
             timeInForce = primaryOrder.getTimeInForce() != null ? primaryOrder.getTimeInForce() : '0'; // Default to DAY
         }
         orderParams.put("timeInForce", timeInForce);
 
-        // Send locate order
-        // IMPORTANT: This is a locate-only order (borrow stock), not an execute buy order.
-        // The ExDestination field set to a locate route (e.g., "TESTSL", "LOCATE") tells DAS
-        // this is a locate order, not a regular buy order. When it "fills" (OrdStatus=2),
-        // it means stock has been located/borrowed, NOT that a buy was executed.
         String locateRoute = context.getExDestination();
         log.info("Sending locate-only order (borrow stock, not execute buy) to shadow account {} (AccountId: {}): " +
                 "ClOrdID={}, Symbol={}, Side=BUY(1), ExDestination={} (locate route), Qty={}, OrdType={}, TimeInForce={}",
@@ -534,21 +633,40 @@ public class FillOrderHandler implements ExecutionReportHandler {
             return;
         }
 
-        // Get shadow accounts with same strategy_key as primary account
-        List<Account> shadowAccounts = accountCacheService.findActiveShadowAccountsByStrategyKey(primaryAccount);
-        log.info("Found {} shadow account(s) for replication: StrategyKey={}, PrimaryAccount={}, PrimaryAccountId={}, ShadowAccounts={}",
-                shadowAccounts.size(), primaryAccount.getStrategyKey(), primaryAccount.getAccountNumber(), primaryAccountId,
+        // Get shadow accounts that match copy rules
+        Character ordType = order.getOrdType();
+        String symbol = context.getSymbol();
+        BigDecimal quantity = context.getOrderQty();
+        
+        List<Account> shadowAccounts = copyRuleService.getShadowAccountsForCopy(
+                primaryAccount, ordType, symbol, quantity);
+        
+        log.info("Found {} shadow account(s) for replication via copy rules: PrimaryAccount={}, PrimaryAccountId={}, OrdType={}, Symbol={}, Qty={}, ShadowAccounts={}",
+                shadowAccounts.size(), primaryAccount.getAccountNumber(), primaryAccountId, ordType, symbol, quantity,
                 shadowAccounts.stream().map(Account::getAccountNumber).collect(Collectors.toList()));
+        
         if (shadowAccounts.isEmpty()) {
-            log.warn("No shadow accounts found with same strategy_key ({}), cannot replicate order. ClOrdID={}, AccountId: {}",
-                    primaryAccount.getStrategyKey(), context.getClOrdID(), primaryAccountId);
+            log.warn("No shadow accounts found matching copy rules, cannot replicate order. ClOrdID={}, AccountId: {}, OrdType={}, Symbol={}, Qty={}",
+                    context.getClOrdID(), primaryAccountId, ordType, symbol, quantity);
             return;
         }
 
-        // Send orders to each shadow account
+        // Send orders to each shadow account using copy rules
         for (Account shadowAccount : shadowAccounts) {
             try {
-                sendOrderToShadowAccount(context, order, shadowAccount, initiatorSessionID);
+                // Get copy rule for this account pair
+                Optional<CopyRule> ruleOpt = copyRuleService.getRuleForAccountPair(
+                        primaryAccount, shadowAccount, ordType, symbol, quantity);
+                
+                if (ruleOpt.isPresent()) {
+                    CopyRule rule = ruleOpt.get();
+                    sendOrderToShadowAccountWithRule(context, order, shadowAccount, rule, initiatorSessionID);
+                } else {
+                    // Fallback: send without rule (should not happen if getShadowAccountsForCopy worked correctly)
+                    log.warn("No copy rule found for account pair, using default behavior. PrimaryAccount={}, ShadowAccount={}",
+                            primaryAccount.getAccountNumber(), shadowAccount.getAccountNumber());
+                    sendOrderToShadowAccount(context, order, shadowAccount, initiatorSessionID);
+                }
             } catch (Exception e) {
                 log.error("Error replicating order to shadow account {} (AccountId: {}): {}", 
                         shadowAccount.getAccountNumber(), shadowAccount.getId(), e.getMessage(), e);
@@ -557,7 +675,74 @@ public class FillOrderHandler implements ExecutionReportHandler {
     }
 
     /**
-     * Send order to a shadow account.
+     * Send order to a shadow account using copy rule.
+     */
+    private void sendOrderToShadowAccountWithRule(ExecutionReportContext context, Order primaryOrder, 
+                                                 Account shadowAccount, CopyRule rule, SessionID initiatorSessionID) {
+        String shadowAccountNumber = shadowAccount.getAccountNumber();
+        String clOrdId = generateShadowClOrdId(context.getClOrdID(), shadowAccountNumber);
+        
+        // Calculate copy quantity based on rule
+        BigDecimal primaryQty = context.getOrderQty();
+        BigDecimal copyQty = copyRuleService.calculateCopyQuantity(rule, primaryQty);
+        
+        // Get original route from context or order
+        String originalRoute = context.getExDestination();
+        if (originalRoute == null || originalRoute.isBlank()) {
+            originalRoute = primaryOrder.getExDestination();
+        }
+        
+        // Determine if this is a locate order
+        boolean isLocateOrder = originalRoute != null && routeService.isLocateRoute(originalRoute);
+        
+        // Get target route from copy rule
+        String targetRoute = copyRuleService.getTargetRoute(rule, originalRoute, isLocateOrder);
+        
+        // Build order parameters
+        Map<String, Object> orderParams = new HashMap<>();
+        orderParams.put("clOrdID", clOrdId);
+        orderParams.put("side", context.getSide());
+        orderParams.put("symbol", context.getSymbol());
+        orderParams.put("orderQty", copyQty.intValue());
+        orderParams.put("account", shadowAccountNumber);
+        
+        // Set order type (default to MARKET if not available)
+        char ordType = primaryOrder.getOrdType() != null ? primaryOrder.getOrdType() : '1'; // MARKET
+        orderParams.put("ordType", ordType);
+        
+        // Set time in force - use from context first, then order entity, then default to DAY
+        Character timeInForce = context.getTimeInForce();
+        if (timeInForce == null) {
+            timeInForce = primaryOrder.getTimeInForce() != null ? primaryOrder.getTimeInForce() : '0'; // Default to DAY
+        }
+        orderParams.put("timeInForce", timeInForce);
+        
+        // Set price if it's a limit order
+        if (primaryOrder.getPrice() != null && (ordType == '2' || ordType == '4')) { // LIMIT or STOP_LIMIT
+            orderParams.put("price", primaryOrder.getPrice().doubleValue());
+        }
+        
+        // Set route from copy rule
+        if (targetRoute != null && !targetRoute.isBlank()) {
+            orderParams.put("exDestination", targetRoute);
+        }
+        
+        Long primaryAccountId = primaryOrder.getAccount() != null ? primaryOrder.getAccount().getId() : null;
+        log.info("Sending copy order with rule: ClOrdID={}, PrimaryAccountId={}, ShadowAccount={}, ShadowAccountId={}, " +
+                "PrimaryQty={}, CopyQty={}, OriginalRoute={}, TargetRoute={}, IsLocate={}, RuleId={}",
+                clOrdId, primaryAccountId, shadowAccountNumber, shadowAccount.getId(), 
+                primaryQty, copyQty, originalRoute, targetRoute, isLocateOrder, rule.getId());
+        
+        // Send order
+        fixMessageSender.sendNewOrderSingle(initiatorSessionID, orderParams);
+        
+        log.info("Copy order sent with rule: ClOrdID={}, PrimaryAccountId={}, ShadowAccount={}, ShadowAccountId={}, " +
+                "CopyQty={}, TargetRoute={}",
+                clOrdId, primaryAccountId, shadowAccountNumber, shadowAccount.getId(), copyQty, targetRoute);
+    }
+
+    /**
+     * Send order to a shadow account (fallback method without copy rule).
      */
     private void sendOrderToShadowAccount(ExecutionReportContext context, Order primaryOrder, 
                                          Account shadowAccount, SessionID initiatorSessionID) {
@@ -577,29 +762,25 @@ public class FillOrderHandler implements ExecutionReportHandler {
         orderParams.put("ordType", ordType);
         
         // Set time in force - use from context first, then order entity, then default to DAY
-        // Parent order might have TimeInForce=5 (Day+), we should copy it to maintain same behavior
         Character timeInForce = context.getTimeInForce();
         if (timeInForce == null) {
             timeInForce = primaryOrder.getTimeInForce() != null ? primaryOrder.getTimeInForce() : '0'; // Default to DAY
         }
         orderParams.put("timeInForce", timeInForce);
         
-        // Set price if it's a limit order (FixMessageSender only supports price, not stopPx)
+        // Set price if it's a limit order
         if (primaryOrder.getPrice() != null && (ordType == '2' || ordType == '4')) { // LIMIT or STOP_LIMIT
             orderParams.put("price", primaryOrder.getPrice().doubleValue());
         }
 
         // Use the same route (exDestination) as the primary account order
-        // Priority: 1) ExecutionReport (most current), 2) Order entity (stored from previous ExecutionReport)
         String route = null;
         Long primaryAccountId = primaryOrder.getAccount() != null ? primaryOrder.getAccount().getId() : null;
         if (context.getExDestination() != null && !context.getExDestination().isBlank()) {
-            // Route is available in current ExecutionReport - use it directly
             route = context.getExDestination();
             log.info("Using ExDestination from ExecutionReport: ClOrdID={}, AccountId: {}, Route={}",
                     context.getClOrdID(), primaryAccountId, route);
         } else if (primaryOrder != null && primaryOrder.getExDestination() != null && !primaryOrder.getExDestination().isBlank()) {
-            // Fallback: Use route stored in Order entity (from previous ExecutionReport)
             route = primaryOrder.getExDestination();
             log.debug("Using ExDestination from Order entity (fallback): ClOrdID={}, AccountId: {}, Route={}", 
                     context.getClOrdID(), primaryAccountId, route);

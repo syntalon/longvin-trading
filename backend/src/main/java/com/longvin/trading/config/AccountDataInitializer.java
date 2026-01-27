@@ -4,9 +4,11 @@ import com.longvin.trading.entities.accounts.Account;
 import com.longvin.trading.entities.accounts.AccountType;
 import com.longvin.trading.entities.accounts.Broker;
 import com.longvin.trading.entities.accounts.DasLoginId;
+import com.longvin.trading.entities.accounts.Route;
 import com.longvin.trading.repository.AccountRepository;
 import com.longvin.trading.repository.BrokerRepository;
 import com.longvin.trading.repository.DasLoginIdRepository;
+import com.longvin.trading.repository.RouteRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
@@ -20,6 +22,8 @@ import org.springframework.transaction.annotation.Transactional;
  * 
  * This component creates:
  * - OPAL broker
+ * - DEFAULT broker (for system routes)
+ * - Default routes (LOCATE, TESTSL) for DEFAULT broker
  * - OS111 DAS login ID
  * - Two accounts: TRDAS83 (SHADOW) and TROS107 (PRIMARY), both linked to OPAL broker and OS111 DAS login ID
  * 
@@ -44,13 +48,16 @@ public class AccountDataInitializer implements ApplicationRunner {
     private final BrokerRepository brokerRepository;
     private final DasLoginIdRepository dasLoginIdRepository;
     private final AccountRepository accountRepository;
+    private final RouteRepository routeRepository;
 
     public AccountDataInitializer(BrokerRepository brokerRepository,
                                   DasLoginIdRepository dasLoginIdRepository,
-                                  AccountRepository accountRepository) {
+                                  AccountRepository accountRepository,
+                                  RouteRepository routeRepository) {
         this.brokerRepository = brokerRepository;
         this.dasLoginIdRepository = dasLoginIdRepository;
         this.accountRepository = accountRepository;
+        this.routeRepository = routeRepository;
     }
 
     @Override
@@ -60,6 +67,8 @@ public class AccountDataInitializer implements ApplicationRunner {
         
         try {
             Broker broker = ensureBroker();
+            Broker defaultBroker = ensureDefaultBroker();
+            ensureDefaultRoutes(defaultBroker);
             DasLoginId dasLoginId = ensureDasLoginId();
 
             for (String accountNumber : ACCOUNT_NUMBERS) {
@@ -87,6 +96,65 @@ public class AccountDataInitializer implements ApplicationRunner {
                             .build();
                     Broker saved = brokerRepository.save(broker);
                     log.info("Created broker: id={}, name={}, code={}", saved.getId(), saved.getName(), saved.getCode());
+                    return saved;
+                });
+    }
+
+    /**
+     * Ensures DEFAULT broker exists, creating it if necessary.
+     * This broker is used for system routes.
+     */
+    private Broker ensureDefaultBroker() {
+        return brokerRepository.findByName("DEFAULT")
+                .orElseGet(() -> {
+                    Broker broker = Broker.builder()
+                            .name("DEFAULT")
+                            .code("DEFAULT")
+                            .description("Default broker for system routes")
+                            .active(true)
+                            .build();
+                    Broker saved = brokerRepository.save(broker);
+                    log.info("Created DEFAULT broker: id={}, name={}", saved.getId(), saved.getName());
+                    return saved;
+                });
+    }
+
+    /**
+     * Ensures default routes exist for the DEFAULT broker.
+     * Creates LOCATE (Type 1) and TESTSL (Type 0) routes if they don't exist.
+     */
+    private void ensureDefaultRoutes(Broker defaultBroker) {
+        // Ensure LOCATE route (Type 1)
+        routeRepository.findByBrokerIdAndNameIgnoreCase(defaultBroker.getId(), "LOCATE")
+                .orElseGet(() -> {
+                    Route route = Route.builder()
+                            .broker(defaultBroker)
+                            .name("LOCATE")
+                            .routeType(Route.LocateRouteType.TYPE_1)
+                            .description("Default Type 1 locate route")
+                            .active(true)
+                            .priority(0)
+                            .build();
+                    Route saved = routeRepository.save(route);
+                    log.info("Created route: id={}, name={}, routeType={}, broker={}", 
+                            saved.getId(), saved.getName(), saved.getRouteType(), defaultBroker.getName());
+                    return saved;
+                });
+
+        // Ensure TESTSL route (Type 0)
+        routeRepository.findByBrokerIdAndNameIgnoreCase(defaultBroker.getId(), "TESTSL")
+                .orElseGet(() -> {
+                    Route route = Route.builder()
+                            .broker(defaultBroker)
+                            .name("TESTSL")
+                            .routeType(Route.LocateRouteType.TYPE_0)
+                            .description("Default Type 0 locate route")
+                            .active(true)
+                            .priority(1)
+                            .build();
+                    Route saved = routeRepository.save(route);
+                    log.info("Created route: id={}, name={}, routeType={}, broker={}", 
+                            saved.getId(), saved.getName(), saved.getRouteType(), defaultBroker.getName());
                     return saved;
                 });
     }

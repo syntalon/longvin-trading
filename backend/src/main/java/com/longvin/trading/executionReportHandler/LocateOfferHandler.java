@@ -5,7 +5,7 @@ import com.longvin.trading.entities.orders.LocateRequest;
 import com.longvin.trading.fixSender.FixMessageSender;
 import com.longvin.trading.repository.LocateRequestRepository;
 import com.longvin.trading.service.LocateDecisionService;
-import com.longvin.trading.service.LocateRouteService;
+import com.longvin.trading.service.RouteService;
 import com.longvin.trading.service.ShortOrderProcessingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,18 +39,18 @@ public class LocateOfferHandler implements ExecutionReportHandler {
     
     private final FixMessageSender fixMessageSender;
     private final LocateDecisionService locateDecisionService;
-    private final LocateRouteService locateRouteService;
+    private final RouteService routeService;
     private final LocateRequestRepository locateRequestRepository;
     private final ShortOrderProcessingService shortOrderProcessingService;
 
     public LocateOfferHandler(FixMessageSender fixMessageSender,
                               LocateDecisionService locateDecisionService,
-                              LocateRouteService locateRouteService,
+                              RouteService routeService,
                               LocateRequestRepository locateRequestRepository,
                               ShortOrderProcessingService shortOrderProcessingService) {
         this.fixMessageSender = fixMessageSender;
         this.locateDecisionService = locateDecisionService;
-        this.locateRouteService = locateRouteService;
+        this.routeService = routeService;
         this.locateRequestRepository = locateRequestRepository;
         this.shortOrderProcessingService = shortOrderProcessingService;
     }
@@ -186,7 +186,7 @@ public class LocateOfferHandler implements ExecutionReportHandler {
      */
     private void requestNewLocateQuote(ExecutionReportContext context, SessionID sessionID) {
         String quoteReqID = "QL_" + context.getOrderID() + "_NEW_" + System.currentTimeMillis();
-        String locateRoute = locateRouteService.getAvailableLocateRoute(context.getSymbol());
+        String locateRoute = routeService.getAvailableLocateRoute(context.getSymbol());
 
         if (locateRoute == null) {
             log.error("No available locate route for symbol: {}", context.getSymbol());
