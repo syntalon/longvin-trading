@@ -208,10 +208,9 @@ public class FillOrderHandler implements ExecutionReportHandler {
                     CopyRule rule = ruleOpt.get();
                     sendOrderToShadowAccountWithRule(context, order, shadowAccount, rule, initiatorSessionID);
                 } else {
-                    // Fallback: send without rule
-                    log.warn("No copy rule found for account pair, using default behavior. PrimaryAccount={}, ShadowAccount={}",
+                    // No copy rule found - skip replication
+                    log.error("No copy rule found for account pair, cannot replicate order. PrimaryAccount={}, ShadowAccount={}",
                             primaryAccount.getAccountNumber(), shadowAccount.getAccountNumber());
-                    sendOrderToShadowAccount(context, order, shadowAccount, initiatorSessionID);
                 }
             } catch (Exception e) {
                 log.error("Error replicating short order to shadow account {} (AccountId: {}): {}", 
@@ -299,6 +298,21 @@ public class FillOrderHandler implements ExecutionReportHandler {
         Character ordType = order.getOrdType();
         // OrdType='3' is STOP (stop market), OrdType='4' is STOP_LIMIT
         return ordType != null && (ordType == '3' || ordType == '4');
+    }
+
+    /**
+     * Check if this is a stop limit order (OrdType=4).
+     * Stop limit orders are skipped because StopPx is not available in ExecutionReport messages.
+     */
+    private boolean isStopLimitOrder(ExecutionReportContext context, Order order) {
+        Character ordType = null;
+        // Check context first (from ExecutionReport tag 40), then order entity
+        if (context.getOrdType() != null) {
+            ordType = context.getOrdType();
+        } else if (order != null && order.getOrdType() != null) {
+            ordType = order.getOrdType();
+        }
+        return ordType != null && ordType == '4'; // STOP_LIMIT
     }
 
     /**
@@ -447,10 +461,9 @@ public class FillOrderHandler implements ExecutionReportHandler {
                         CopyRule rule = ruleOpt.get();
                         sendLocateOrderToShadowAccountWithRule(context, order, shadowAccount, rule, initiatorSessionID);
                     } else {
-                        // Fallback: send without rule
-                        log.warn("No copy rule found for account pair, using default behavior. PrimaryAccount={}, ShadowAccount={}",
+                        // No copy rule found - skip replication
+                        log.error("No copy rule found for account pair, cannot replicate locate order. PrimaryAccount={}, ShadowAccount={}",
                                 primaryAccount.getAccountNumber(), shadowAccount.getAccountNumber());
-                        sendLocateOrderToShadowAccount(context, order, shadowAccount, initiatorSessionID);
                     }
                 } catch (Exception e) {
                     log.error("Error sending locate order to shadow account {} (AccountId: {}): {}", 
@@ -557,50 +570,6 @@ public class FillOrderHandler implements ExecutionReportHandler {
     }
 
     /**
-     * Send locate order to a shadow account (fallback method without copy rule).
-     */
-    private void sendLocateOrderToShadowAccount(ExecutionReportContext context, Order primaryOrder,
-                                               Account shadowAccount, SessionID initiatorSessionID) {
-        String shadowAccountNumber = shadowAccount.getAccountNumber();
-        String clOrdId = generateShadowClOrdId(context.getClOrdID(), shadowAccountNumber);
-        
-        // Build order parameters for locate order
-        Map<String, Object> orderParams = new HashMap<>();
-        orderParams.put("clOrdID", clOrdId);
-        orderParams.put("side", '1'); // BUY for locate orders
-        orderParams.put("symbol", context.getSymbol());
-        orderParams.put("orderQty", context.getOrderQty().intValue());
-        orderParams.put("account", shadowAccountNumber);
-        orderParams.put("exDestination", context.getExDestination()); // Locate route
-        
-        // Set order type (default to MARKET if not available)
-        char ordType = primaryOrder.getOrdType() != null ? primaryOrder.getOrdType() : '1'; // MARKET
-        orderParams.put("ordType", ordType);
-        
-        // Set time in force
-        Character timeInForce = context.getTimeInForce();
-        if (timeInForce == null) {
-            timeInForce = primaryOrder.getTimeInForce() != null ? primaryOrder.getTimeInForce() : '0'; // Default to DAY
-        }
-        orderParams.put("timeInForce", timeInForce);
-
-        String locateRoute = context.getExDestination();
-        log.info("Sending locate-only order (borrow stock, not execute buy) to shadow account {} (AccountId: {}): " +
-                "ClOrdID={}, Symbol={}, Side=BUY(1), ExDestination={} (locate route), Qty={}, OrdType={}, TimeInForce={}",
-                shadowAccountNumber, shadowAccount.getId(), clOrdId, context.getSymbol(), 
-                locateRoute, context.getOrderQty(), ordType, timeInForce);
-        
-        fixMessageSender.sendNewOrderSingle(initiatorSessionID, orderParams);
-        
-        Long primaryAccountId = primaryOrder != null && primaryOrder.getAccount() != null ? 
-                primaryOrder.getAccount().getId() : null;
-        log.info("Locate order (3.14) sent to shadow account {} (AccountId: {}): ClOrdID={}, PrimaryAccountId: {}, Symbol={}, LocateRoute={}, Qty={}. " +
-                "This is a locate-only order (borrow stock), not an execute buy order.",
-                shadowAccountNumber, shadowAccount.getId(), clOrdId, primaryAccountId, 
-                context.getSymbol(), locateRoute, context.getOrderQty());
-    }
-
-    /**
      * Handle regular order (buy/sell, not short) replication when order is filled.
      * Sends orders to shadow accounts.
      */
@@ -662,10 +631,9 @@ public class FillOrderHandler implements ExecutionReportHandler {
                     CopyRule rule = ruleOpt.get();
                     sendOrderToShadowAccountWithRule(context, order, shadowAccount, rule, initiatorSessionID);
                 } else {
-                    // Fallback: send without rule (should not happen if getShadowAccountsForCopy worked correctly)
-                    log.warn("No copy rule found for account pair, using default behavior. PrimaryAccount={}, ShadowAccount={}",
+                    // No copy rule found - skip replication
+                    log.error("No copy rule found for account pair, cannot replicate order. PrimaryAccount={}, ShadowAccount={}",
                             primaryAccount.getAccountNumber(), shadowAccount.getAccountNumber());
-                    sendOrderToShadowAccount(context, order, shadowAccount, initiatorSessionID);
                 }
             } catch (Exception e) {
                 log.error("Error replicating order to shadow account {} (AccountId: {}): {}", 
@@ -706,8 +674,16 @@ public class FillOrderHandler implements ExecutionReportHandler {
         orderParams.put("orderQty", copyQty.intValue());
         orderParams.put("account", shadowAccountNumber);
         
-        // Set order type (default to MARKET if not available)
-        char ordType = primaryOrder.getOrdType() != null ? primaryOrder.getOrdType() : '1'; // MARKET
+        // Set order type - prioritize context (from ExecutionReport tag 40) over order entity
+        // ExecutionReport has the most accurate order type from the FIX message
+        char ordType;
+        if (context.getOrdType() != null) {
+            ordType = context.getOrdType();
+        } else if (primaryOrder.getOrdType() != null) {
+            ordType = primaryOrder.getOrdType();
+        } else {
+            ordType = '1'; // Default to MARKET
+        }
         orderParams.put("ordType", ordType);
         
         // Set time in force - use from context first, then order entity, then default to DAY
@@ -717,10 +693,23 @@ public class FillOrderHandler implements ExecutionReportHandler {
         }
         orderParams.put("timeInForce", timeInForce);
         
-        // Set price if it's a limit order
-        if (primaryOrder.getPrice() != null && (ordType == '2' || ordType == '4')) { // LIMIT or STOP_LIMIT
-            orderParams.put("price", primaryOrder.getPrice().doubleValue());
+        // Set price if it's a limit order - prioritize context (from ExecutionReport tag 44) over order entity
+        if (ordType == '2') { // LIMIT or STOP_LIMIT
+            BigDecimal price = null;
+            if (context.getPrice() != null) {
+                price = context.getPrice(); // Use price from ExecutionReport (tag 44)
+            } else if (primaryOrder.getPrice() != null) {
+                price = primaryOrder.getPrice(); // Fallback to order entity
+            }
+            
+            if (price != null) {
+                orderParams.put("price", price.doubleValue());
+            } else {
+                log.warn("Limit order (OrdType={}) has no price in ExecutionReport or Order entity. ClOrdID={}, CopyClOrdID={}",
+                        ordType, context.getClOrdID(), clOrdId);
+            }
         }
+
         
         // Set route from copy rule
         if (targetRoute != null && !targetRoute.isBlank()) {
@@ -741,73 +730,6 @@ public class FillOrderHandler implements ExecutionReportHandler {
                 clOrdId, primaryAccountId, shadowAccountNumber, shadowAccount.getId(), copyQty, targetRoute);
     }
 
-    /**
-     * Send order to a shadow account (fallback method without copy rule).
-     */
-    private void sendOrderToShadowAccount(ExecutionReportContext context, Order primaryOrder, 
-                                         Account shadowAccount, SessionID initiatorSessionID) {
-        String shadowAccountNumber = shadowAccount.getAccountNumber();
-        String clOrdId = generateShadowClOrdId(context.getClOrdID(), shadowAccountNumber);
-        
-        // Build order parameters
-        Map<String, Object> orderParams = new HashMap<>();
-        orderParams.put("clOrdID", clOrdId);
-        orderParams.put("side", context.getSide());
-        orderParams.put("symbol", context.getSymbol());
-        orderParams.put("orderQty", context.getOrderQty().intValue());
-        orderParams.put("account", shadowAccountNumber);
-        
-        // Set order type (default to MARKET if not available)
-        char ordType = primaryOrder.getOrdType() != null ? primaryOrder.getOrdType() : '1'; // MARKET
-        orderParams.put("ordType", ordType);
-        
-        // Set time in force - use from context first, then order entity, then default to DAY
-        Character timeInForce = context.getTimeInForce();
-        if (timeInForce == null) {
-            timeInForce = primaryOrder.getTimeInForce() != null ? primaryOrder.getTimeInForce() : '0'; // Default to DAY
-        }
-        orderParams.put("timeInForce", timeInForce);
-        
-        // Set price if it's a limit order
-        if (primaryOrder.getPrice() != null && (ordType == '2' || ordType == '4')) { // LIMIT or STOP_LIMIT
-            orderParams.put("price", primaryOrder.getPrice().doubleValue());
-        }
-
-        // Use the same route (exDestination) as the primary account order
-        String route = null;
-        Long primaryAccountId = primaryOrder.getAccount() != null ? primaryOrder.getAccount().getId() : null;
-        if (context.getExDestination() != null && !context.getExDestination().isBlank()) {
-            route = context.getExDestination();
-            log.info("Using ExDestination from ExecutionReport: ClOrdID={}, AccountId: {}, Route={}",
-                    context.getClOrdID(), primaryAccountId, route);
-        } else if (primaryOrder != null && primaryOrder.getExDestination() != null && !primaryOrder.getExDestination().isBlank()) {
-            route = primaryOrder.getExDestination();
-            log.debug("Using ExDestination from Order entity (fallback): ClOrdID={}, AccountId: {}, Route={}", 
-                    context.getClOrdID(), primaryAccountId, route);
-        } else {
-            log.warn("No ExDestination available for copy order. ClOrdID={}, PrimaryOrderClOrdID={}, PrimaryAccountId: {}, Symbol={}. " +
-                    "Copy order will be sent without route, which may cause rejection.",
-                    clOrdId, context.getClOrdID(), primaryAccountId, context.getSymbol());
-        }
-        
-        if (route != null) {
-            orderParams.put("exDestination", route);
-        }
-
-        // Log the copy order details before sending
-        String routeInfo = route != null ? ", Route=" + route : "";
-        log.info("Sending copy order to shadow account {} (AccountId: {}): ClOrdID={}, PrimaryAccountId: {}, Symbol={}, Side={}, Qty={}, OrdType={}, Price={}{}, AccountInOrder={}",
-                shadowAccountNumber, shadowAccount.getId(), clOrdId, primaryAccountId, context.getSymbol(), 
-                context.getSide(), context.getOrderQty(), ordType, 
-                primaryOrder.getPrice() != null ? primaryOrder.getPrice() : "N/A", routeInfo, shadowAccountNumber);
-
-        // Send order
-        fixMessageSender.sendNewOrderSingle(initiatorSessionID, orderParams);
-        
-        log.info("Copy order sent to shadow account {} (AccountId: {}): ClOrdID={}, PrimaryAccountId: {}, Symbol={}, Side={}, Qty={}{}, AccountInOrder={}",
-                shadowAccountNumber, shadowAccount.getId(), clOrdId, primaryAccountId, 
-                context.getSymbol(), context.getSide(), context.getOrderQty(), routeInfo, shadowAccountNumber);
-    }
 
     
     /**
@@ -847,14 +769,21 @@ public class FillOrderHandler implements ExecutionReportHandler {
             return;
         }
         
+        // Skip stop limit orders - StopPx is not available in ExecutionReport messages
+        if (isStopLimitOrder(context, order)) {
+            log.info("Skipping stop limit order replication - StopPx not available in ExecutionReport. ClOrdID={}, Account: {}, AccountId: {}, Symbol={}",
+                    context.getClOrdID(), context.getAccount(), accountId, context.getSymbol());
+            // Do nothing else - just skip replication
+            return;
+        }
+        
         // For primary account orders, replicate to shadow accounts when filled
-        // Skip stop orders (stop market and stop limit) - they are handled in NewOrderHandler when confirmed
+        // Skip stop market orders - they are handled in NewOrderHandler when confirmed
         if (isStopOrder(order)) {
-            String ordTypeName = order.getOrdType() != null && order.getOrdType() == '3' ? "STOP(3)" : "STOP_LIMIT(4)";
-            log.info("Stop order detected - skipping replication in FillOrderHandler. " +
-                    "ClOrdID={}, Account: {}, AccountId: {}, Symbol={}, OrdType={}. " +
-                    "Stop orders are copied when confirmed (NewOrderHandler), not when filled.",
-                    context.getClOrdID(), context.getAccount(), accountId, context.getSymbol(), ordTypeName);
+            log.info("Stop market order detected - skipping replication in FillOrderHandler. " +
+                    "ClOrdID={}, Account: {}, AccountId: {}, Symbol={}, OrdType=STOP(3). " +
+                    "Stop market orders are copied when confirmed (NewOrderHandler), not when filled.",
+                    context.getClOrdID(), context.getAccount(), accountId, context.getSymbol());
             // Only update order status/events, do NOT replicate stop orders
             return;
         }

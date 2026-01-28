@@ -50,8 +50,8 @@ public class ExecutionReportProcessor {
             log.info("Processing Short Locate Quote Response (MsgType=S): QuoteReqID={}, Symbol={}, OfferPx={}, OfferSize={}",
                     context.getQuoteReqID(), context.getSymbol(), context.getOfferPx(), context.getOfferSize());
         } else {
-            log.info("Processing ExecutionReport: ClOrdID={}, ExecType={}, OrdStatus={}, Symbol={}",
-                    context.getClOrdID(), context.getExecType(), context.getOrdStatus(), context.getSymbol());
+        log.info("Processing ExecutionReport: ClOrdID={}, ExecType={}, OrdStatus={}, Symbol={}",
+                context.getClOrdID(), context.getExecType(), context.getOrdStatus(), context.getSymbol());
         }
 
         // Find ALL matching handlers instead of just the first one

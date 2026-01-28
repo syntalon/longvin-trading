@@ -156,10 +156,9 @@ public class NewOrderHandler implements ExecutionReportHandler {
                     CopyRule rule = ruleOpt.get();
                     sendStopMarketOrderToShadowAccountWithRule(context, shadowAccount, primaryAccount, rule, initiatorSessionID);
                 } else {
-                    // Fallback: send without rule
-                    log.warn("No copy rule found for account pair, using default behavior. PrimaryAccount={}, ShadowAccount={}",
+                    // No copy rule found - skip replication
+                    log.error("No copy rule found for account pair, cannot copy stop market order. PrimaryAccount={}, ShadowAccount={}",
                             primaryAccount.getAccountNumber(), shadowAccount.getAccountNumber());
-                    sendStopMarketOrderToShadowAccount(context, shadowAccount, primaryAccount, initiatorSessionID);
                 }
             } catch (Exception e) {
                 log.error("Error copying stop market order to shadow account {} (AccountId: {}): {}", 
@@ -226,51 +225,4 @@ public class NewOrderHandler implements ExecutionReportHandler {
                 clOrdId, primaryAccountId, shadowAccountNumber, shadowAccount.getId(), copyQty, targetRoute);
     }
 
-    /**
-     * Send stop market order to a shadow account (fallback method without copy rule).
-     */
-    private void sendStopMarketOrderToShadowAccount(ExecutionReportContext context, Account shadowAccount, 
-                                                    Account primaryAccount, SessionID initiatorSessionID) {
-        String shadowAccountNumber = shadowAccount.getAccountNumber();
-        String clOrdId = "COPY-" + shadowAccountNumber + "-" + context.getClOrdID();
-        
-        // Build order parameters
-        Map<String, Object> orderParams = new HashMap<>();
-        orderParams.put("clOrdID", clOrdId);
-        orderParams.put("side", context.getSide());
-        orderParams.put("symbol", context.getSymbol());
-        orderParams.put("orderQty", context.getOrderQty().intValue());
-        orderParams.put("account", shadowAccountNumber);
-        orderParams.put("ordType", '3'); // STOP market order
-        
-        // TimeInForce - use from context if available, otherwise default to DAY
-        Character timeInForce = context.getTimeInForce();
-        if (timeInForce == null) {
-            timeInForce = '0'; // Default to DAY if not available
-        }
-        orderParams.put("timeInForce", timeInForce);
-        
-        // Stop market orders don't require StopPx
-        if (context.getStopPx() != null) {
-            orderParams.put("stopPx", context.getStopPx().doubleValue());
-        }
-        
-        // Use the same route (exDestination) as the primary account order
-        String route = context.getExDestination();
-        if (route != null && !route.isBlank()) {
-            orderParams.put("exDestination", route);
-        }
-        
-        Long primaryAccountId = primaryAccount.getId();
-        log.info("Sending stop market order copy to shadow account {} (AccountId: {}): ClOrdID={}, PrimaryAccountId: {}, Symbol={}, Side={}, Qty={}",
-                shadowAccountNumber, shadowAccount.getId(), clOrdId, primaryAccountId, context.getSymbol(),
-                context.getSide(), context.getOrderQty());
-        
-        // Send order
-        fixMessageSender.sendNewOrderSingle(initiatorSessionID, orderParams);
-        
-        log.info("Stop market order copy sent to shadow account {} (AccountId: {}): ClOrdID={}, PrimaryAccountId: {}, Symbol={}, Side={}, Qty={}",
-                shadowAccountNumber, shadowAccount.getId(), clOrdId, primaryAccountId,
-                context.getSymbol(), context.getSide(), context.getOrderQty());
-    }
 }
