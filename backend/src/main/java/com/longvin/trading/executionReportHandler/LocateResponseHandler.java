@@ -50,24 +50,33 @@ public class LocateResponseHandler implements ExecutionReportHandler {
 
         // Parse QuoteReqID to extract shadow account info and route
         // Format: QL_{shadowAccount}_{primaryClOrdId}_{route}_{timestamp}
+        // Note: Broker may append symbol (e.g., "DRMA") to the timestamp part, but our parsing
+        // only uses the first 4 parts, so this is fine.
         String shadowAccount = null;
         String primaryClOrdId = null;
         String locateRoute = null;
         if (quoteReqID != null && quoteReqID.startsWith("QL_")) {
             String[] parts = quoteReqID.split("_");
+            log.debug("Parsing QuoteReqID: original={}, parts.length={}, parts={}", 
+                    quoteReqID, parts.length, String.join(", ", parts));
+            
             if (parts.length >= 4) {
                 shadowAccount = parts[1];
                 primaryClOrdId = parts[2];
                 locateRoute = parts[3];
-                log.debug("Parsed QuoteReqID: shadowAccount={}, primaryClOrdId={}, route={}", 
-                        shadowAccount, primaryClOrdId, locateRoute);
+                log.info("Parsed QuoteReqID: shadowAccount={}, primaryClOrdId={}, route={}, originalQuoteReqID={}", 
+                        shadowAccount, primaryClOrdId, locateRoute, quoteReqID);
             } else if (parts.length >= 3) {
                 // Fallback for old format without route
                 shadowAccount = parts[1];
                 primaryClOrdId = parts[2];
-                log.debug("Parsed QuoteReqID (old format): shadowAccount={}, primaryClOrdId={}", 
-                        shadowAccount, primaryClOrdId);
+                log.info("Parsed QuoteReqID (old format): shadowAccount={}, primaryClOrdId={}, originalQuoteReqID={}", 
+                        shadowAccount, primaryClOrdId, quoteReqID);
+            } else {
+                log.warn("QuoteReqID format unexpected: QuoteReqID={}, parts.length={}", quoteReqID, parts.length);
             }
+        } else {
+            log.warn("QuoteReqID does not start with 'QL_': QuoteReqID={}", quoteReqID);
         }
         
         // Use ExDestination from context if available, otherwise use parsed route
