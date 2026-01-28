@@ -3,6 +3,7 @@ package com.longvin.trading.service;
 import com.longvin.trading.entities.accounts.Account;
 import com.longvin.trading.entities.copy.CopyRule;
 import com.longvin.trading.repository.CopyRuleRepository;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -45,8 +46,9 @@ public class CopyRuleService {
 
     /**
      * Load copy rules into memory cache.
-     * Should be called on startup and after rule changes.
+     * Called automatically on startup via @PostConstruct and after rule changes.
      */
+    @PostConstruct
     @Transactional(readOnly = true)
     public synchronized void loadRules() {
         log.info("Loading copy rules into memory cache...");
