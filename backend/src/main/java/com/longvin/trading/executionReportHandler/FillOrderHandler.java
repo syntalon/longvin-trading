@@ -111,41 +111,39 @@ public class FillOrderHandler implements ExecutionReportHandler {
                     context.getAvgPx(), isCopyOrder);
         }
         
-        if (isCopyOrder) {
-            // This is a copy order - update order status/events, never run copy trades
+        if (isCopyOrder || accountType == AccountType.SHADOW) {
+            // This is a copy order (shadow account) - create event only, never run copy trades
             String orderType = isLocateOrder(context) ? "locate order (BUY with locate route)" : "regular order";
-            log.info("Copy order detected - updating order and creating event. ClOrdID={}, Account={}, AccountId={}, ExecType={}, OrdStatus={}, OrderType={}, Route={}",
+            log.info("Copy order detected - creating event. ClOrdID={}, Account={}, AccountId={}, ExecType={}, OrdStatus={}, OrderType={}, Route={}",
                     context.getClOrdID(), context.getAccount(), accountId, context.getExecType(), 
                     context.getOrdStatus(), orderType, context.getExDestination());
             try {
-                orderService.updateCopyOrderAndCreateEvent(context, sessionID);
+                orderService.createEventForOrder(context, sessionID);
             } catch (Exception e) {
-                log.error("Error updating copy order: ClOrdID={}, Account={}, Error={}", 
+                log.error("Error creating event for copy order: ClOrdID={}, Account={}, Error={}", 
                         context.getClOrdID(), context.getAccount(), e.getMessage(), e);
             }
         } else if (accountType == AccountType.PRIMARY) {
-            // This is a primary/main account order from DAS Trader - update order/event and run copy trades to shadow accounts
+            // This is a primary/main account order from DAS Trader - create event and run copy trades to shadow accounts
             try {
-                // Update primary order and create event
-                orderService.updatePrimaryOrderAndCreateEvent(context, sessionID);
+                // Create event for primary order (filled/partially filled)
+                orderService.createEventForOrder(context, sessionID);
             } catch (Exception e) {
-                log.error("Error updating primary order: ClOrdID={}, Account={}, Error={}", 
+                log.error("Error creating event for primary order: ClOrdID={}, Account={}, Error={}", 
                         context.getClOrdID(), context.getAccount(), e.getMessage(), e);
             }
             // Run copy trades to shadow accounts
             handlePrimaryOrderExecutionReport(context);
-        } else if (accountType == AccountType.SHADOW) {
-            // This is a shadow account order (copy order) - update order status/events, never run copy trades
-            try {
-                orderService.updateCopyOrderAndCreateEvent(context, sessionID);
-            } catch (Exception e) {
-                log.error("Error updating shadow account order: ClOrdID={}, Account={}, Error={}", 
-                        context.getClOrdID(), context.getAccount(), e.getMessage(), e);
-            }
         } else {
-            // Unknown account type - just update status/events if order exists
+            // Unknown account type - just create event if order exists
             log.warn("Unknown account type for ExecutionReport. ClOrdID: {}, Account: {}, AccountId: {}", 
                     context.getClOrdID(), context.getAccount(), accountId);
+            try {
+                orderService.createEventForOrder(context, sessionID);
+            } catch (Exception e) {
+                log.error("Error creating event for order: ClOrdID={}, Account={}, Error={}", 
+                        context.getClOrdID(), context.getAccount(), e.getMessage(), e);
+            }
         }
     }
 
@@ -440,31 +438,24 @@ public class FillOrderHandler implements ExecutionReportHandler {
                 clOrdId, primaryAccount.getId(), shadowAccountNumber, shadowAccount.getId(), 
                 primaryQty, copyQty, originalRoute, locateRoute, rule.getId());
         
-        // Persist shadow account order BEFORE sending FIX message
-        // This ensures the order exists in DB before any ExecutionReport arrives
-        try {
-            orderService.createShadowAccountOrder(
-                    context.getClOrdID(), // Primary order ClOrdID
-                    shadowAccount,
-                    clOrdId, // Shadow order ClOrdID
-                    context.getSymbol(),
-                    '1', // BUY for locate orders
-                    ordType,
-                    copyQty,
-                    context.getPrice(),
-                    context.getStopPx(),
-                    timeInForce,
-                    locateRoute
-            );
-        } catch (Exception e) {
-            log.error("Error persisting shadow locate order before sending: ShadowClOrdID={}, Error={}", 
-                    clOrdId, e.getMessage(), e);
-            // Don't send order if persistence fails
-            return;
-        }
-        
-        // Send order AFTER it's persisted
+        // Send order first
         fixMessageSender.sendNewOrderSingle(initiatorSessionID, orderParams);
+        
+        // Create shadow order with "Staged" event asynchronously (non-blocking)
+        orderService.createShadowOrderWithStagedEventAsync(
+                context.getClOrdID(), // Primary order ClOrdID
+                shadowAccount,
+                clOrdId, // Shadow order ClOrdID
+                context.getSymbol(),
+                '1', // BUY for locate orders
+                ordType,
+                copyQty,
+                context.getPrice(),
+                context.getStopPx(),
+                timeInForce,
+                locateRoute,
+                initiatorSessionID
+        );
         
         log.info("Locate order (3.14) sent with rule: ClOrdID={}, PrimaryAccountId={}, ShadowAccount={}, ShadowAccountId={}, " +
                 "CopyQty={}, LocateRoute={}",
@@ -602,31 +593,24 @@ public class FillOrderHandler implements ExecutionReportHandler {
                 clOrdId, primaryAccount.getId(), shadowAccountNumber, shadowAccount.getId(), 
                 primaryQty, copyQty, originalRoute, targetRoute, isLocateOrder, rule.getId());
         
-        // Persist shadow account order BEFORE sending FIX message
-        // This ensures the order exists in DB before any ExecutionReport arrives
-        try {
-            orderService.createShadowAccountOrder(
-                    context.getClOrdID(), // Primary order ClOrdID
-                    shadowAccount,
-                    clOrdId, // Shadow order ClOrdID
-                    context.getSymbol(),
-                    context.getSide(),
-                    ordType,
-                    copyQty,
-                    context.getPrice(),
-                    context.getStopPx(),
-                    timeInForce,
-                    targetRoute
-            );
-        } catch (Exception e) {
-            log.error("Error persisting shadow account order before sending: ShadowClOrdID={}, Error={}", 
-                    clOrdId, e.getMessage(), e);
-            // Don't send order if persistence fails
-            return;
-        }
-        
-        // Send order AFTER it's persisted
+        // Send order first
         fixMessageSender.sendNewOrderSingle(initiatorSessionID, orderParams);
+        
+        // Create shadow order with "Staged" event asynchronously (non-blocking)
+        orderService.createShadowOrderWithStagedEventAsync(
+                context.getClOrdID(), // Primary order ClOrdID
+                shadowAccount,
+                clOrdId, // Shadow order ClOrdID
+                context.getSymbol(),
+                context.getSide(),
+                ordType,
+                copyQty,
+                context.getPrice(),
+                context.getStopPx(),
+                timeInForce,
+                targetRoute,
+                initiatorSessionID
+        );
         
         log.info("Copy order sent with rule: ClOrdID={}, PrimaryAccountId={}, ShadowAccount={}, ShadowAccountId={}, " +
                 "CopyQty={}, TargetRoute={}",

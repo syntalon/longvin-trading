@@ -63,20 +63,20 @@ public class NewOrderHandler implements ExecutionReportHandler {
                 context.getClOrdID(), context.getOrderID(), context.getSymbol(),
                 context.getSide(), context.getOrderQty());
         
-        // Handle copy orders - update order and create event
+        // Handle copy orders (shadow account orders) - create event only, no order creation/update
         if (context.getClOrdID() != null && context.getClOrdID().startsWith("COPY-")) {
             try {
-                orderService.updateCopyOrderAndCreateEvent(context, sessionID);
-                log.info("Copy order updated and event created: ClOrdID={}, OrderID={}, ExecType={}, OrdStatus={}",
+                orderService.createEventForShadowOrder(context, sessionID);
+                log.info("New event created for shadow order: ClOrdID={}, OrderID={}, ExecType={}, OrdStatus={}",
                         context.getClOrdID(), context.getOrderID(), context.getExecType(), context.getOrdStatus());
             } catch (Exception e) {
-                log.error("Error updating copy order: ClOrdID={}, Account={}, Error={}", 
+                log.error("Error creating event for shadow order: ClOrdID={}, Account={}, Error={}", 
                         context.getClOrdID(), context.getAccount(), e.getMessage(), e);
             }
             return;
         }
         
-        // Persist order (service handles validation for primary accounts)
+        // For primary account orders: create order and New event
         try {
             orderService.createOrUpdateOrderForPrimaryAccount(context, sessionID);
             log.info("Order persisted successfully for primary account: ClOrdID={}, OrderID={}, Symbol={}, Side={}, Qty={}",
@@ -240,31 +240,24 @@ public class NewOrderHandler implements ExecutionReportHandler {
                 clOrdId, primaryAccountId, shadowAccountNumber, shadowAccount.getId(), 
                 primaryQty, copyQty, originalRoute, targetRoute, rule.getId());
         
-        // Persist shadow account order BEFORE sending FIX message
-        // This ensures the order exists in DB before any ExecutionReport arrives
-        try {
-            orderService.createShadowAccountOrder(
-                    context.getClOrdID(), // Primary order ClOrdID
-                    shadowAccount,
-                    clOrdId, // Shadow order ClOrdID
-                    context.getSymbol(),
-                    context.getSide(),
-                    '3', // STOP market order
-                    copyQty,
-                    context.getPrice(),
-                    context.getStopPx(),
-                    timeInForce,
-                    targetRoute
-            );
-        } catch (Exception e) {
-            log.error("Error persisting shadow account order before sending: ShadowClOrdID={}, Error={}", 
-                    clOrdId, e.getMessage(), e);
-            // Don't send order if persistence fails
-            return;
-        }
-        
-        // Send order AFTER it's persisted
+        // Send order first
         fixMessageSender.sendNewOrderSingle(initiatorSessionID, orderParams);
+        
+        // Create shadow order with "Staged" event asynchronously (non-blocking)
+        orderService.createShadowOrderWithStagedEventAsync(
+                context.getClOrdID(), // Primary order ClOrdID
+                shadowAccount,
+                clOrdId, // Shadow order ClOrdID
+                context.getSymbol(),
+                context.getSide(),
+                '3', // STOP market order
+                copyQty,
+                context.getPrice(),
+                context.getStopPx(),
+                timeInForce,
+                targetRoute,
+                initiatorSessionID
+        );
         
         log.info("Stop market order copy sent with rule: ClOrdID={}, PrimaryAccountId={}, ShadowAccount={}, ShadowAccountId={}, " +
                 "CopyQty={}, TargetRoute={}",

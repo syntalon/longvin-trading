@@ -34,6 +34,13 @@ public interface OrderEventRepository extends JpaRepository<OrderEvent, UUID> {
     List<OrderEvent> findByOrderIdOrderByEventTimeAsc(UUID orderId);
     
     /**
+     * Find all events by FIX ClOrdID (Client Order ID).
+     * This is the primary way to link events to orders since ClOrdID is always present.
+     * Events can exist independently of orders (event-driven architecture).
+     */
+    List<OrderEvent> findByFixClOrdIdOrderByEventTimeAsc(String fixClOrdId);
+    
+    /**
      * Find event by FIX ExecID.
      */
     Optional<OrderEvent> findByFixExecId(String fixExecId);

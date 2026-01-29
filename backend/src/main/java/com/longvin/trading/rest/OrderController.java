@@ -1,9 +1,12 @@
 package com.longvin.trading.rest;
 
 import com.longvin.trading.dto.orders.OrderDto;
+import com.longvin.trading.dto.orders.OrderEventDto;
 import com.longvin.trading.entities.accounts.Account;
 import com.longvin.trading.entities.orders.Order;
+import com.longvin.trading.entities.orders.OrderEvent;
 import com.longvin.trading.repository.AccountRepository;
+import com.longvin.trading.repository.OrderEventRepository;
 import com.longvin.trading.repository.OrderRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,10 +34,14 @@ public class OrderController {
 
     private final OrderRepository orderRepository;
     private final AccountRepository accountRepository;
+    private final OrderEventRepository orderEventRepository;
 
-    public OrderController(OrderRepository orderRepository, AccountRepository accountRepository) {
+    public OrderController(OrderRepository orderRepository, 
+                          AccountRepository accountRepository,
+                          OrderEventRepository orderEventRepository) {
         this.orderRepository = orderRepository;
         this.accountRepository = accountRepository;
+        this.orderEventRepository = orderEventRepository;
     }
 
     /**
@@ -165,6 +172,88 @@ public class OrderController {
                 .map(this::toDto)
                 .collect(Collectors.toList());
         return ResponseEntity.ok(dtos);
+    }
+
+    /**
+     * Get all events for an order by order ID.
+     */
+    @GetMapping("/{orderId}/events")
+    public ResponseEntity<List<OrderEventDto>> getOrderEventsByOrderId(@PathVariable UUID orderId) {
+        Optional<Order> orderOpt = orderRepository.findById(orderId);
+        if (orderOpt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        Order order = orderOpt.get();
+        List<OrderEvent> events = orderEventRepository.findByOrderOrderByEventTimeAsc(order);
+        List<OrderEventDto> dtos = events.stream()
+                .map(this::eventToDto)
+                .collect(Collectors.toList());
+        return ResponseEntity.ok(dtos);
+    }
+
+    /**
+     * Get all events for an order by ClOrdID (event-driven: events can exist without order).
+     */
+    @GetMapping("/events")
+    public ResponseEntity<List<OrderEventDto>> getOrderEventsByClOrdId(
+            @RequestParam(required = false) String fixClOrdId,
+            @RequestParam(required = false) UUID orderId) {
+        
+        List<OrderEvent> events;
+        
+        if (fixClOrdId != null && !fixClOrdId.isBlank()) {
+            // Get events by ClOrdID (event-driven: events can exist without order)
+            events = orderEventRepository.findByFixClOrdIdOrderByEventTimeAsc(fixClOrdId);
+        } else if (orderId != null) {
+            // Get events by order ID
+            Optional<Order> orderOpt = orderRepository.findById(orderId);
+            if (orderOpt.isEmpty()) {
+                return ResponseEntity.notFound().build();
+            }
+            events = orderEventRepository.findByOrderOrderByEventTimeAsc(orderOpt.get());
+        } else {
+            return ResponseEntity.badRequest().build();
+        }
+        
+        List<OrderEventDto> dtos = events.stream()
+                .map(this::eventToDto)
+                .collect(Collectors.toList());
+        return ResponseEntity.ok(dtos);
+    }
+
+    /**
+     * Convert OrderEvent entity to DTO.
+     */
+    private OrderEventDto eventToDto(OrderEvent event) {
+        return OrderEventDto.builder()
+                .id(event.getId())
+                .orderId(event.getOrder() != null ? event.getOrder().getId() : null)
+                .fixExecId(event.getFixExecId())
+                .execType(event.getExecType())
+                .ordStatus(event.getOrdStatus())
+                .fixOrderId(event.getFixOrderId())
+                .fixClOrdId(event.getFixClOrdId())
+                .fixOrigClOrdId(event.getFixOrigClOrdId())
+                .symbol(event.getSymbol())
+                .side(event.getSide())
+                .ordType(event.getOrdType())
+                .timeInForce(event.getTimeInForce())
+                .orderQty(event.getOrderQty())
+                .price(event.getPrice())
+                .stopPx(event.getStopPx())
+                .lastPx(event.getLastPx())
+                .lastQty(event.getLastQty())
+                .cumQty(event.getCumQty())
+                .leavesQty(event.getLeavesQty())
+                .avgPx(event.getAvgPx())
+                .account(event.getAccount())
+                .transactTime(event.getTransactTime())
+                .text(event.getText())
+                .eventTime(event.getEventTime())
+                .rawFixMessage(event.getRawFixMessage())
+                .sessionId(event.getSessionId())
+                .build();
     }
 
     /**

@@ -35,9 +35,11 @@ public class OrderEvent {
 
     /**
      * The order this event belongs to.
+     * Nullable to support event-driven architecture where events can exist independently of orders.
+     * Events can be created even if the order doesn't exist yet in the database.
      */
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "order_id", nullable = false)
+    @JoinColumn(name = "order_id", nullable = true)
     private Order order;
 
     /**

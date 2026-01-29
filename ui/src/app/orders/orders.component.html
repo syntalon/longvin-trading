@@ -82,6 +82,8 @@
           <th>Avg Px</th>
           <th>Created</th>
           <th>Group</th>
+          <th>Events</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -124,7 +126,7 @@
             </td>
             <td>{{ order.cumQty || 'N/A' }}</td>
             <td>{{ order.avgPx || 'N/A' }}</td>
-            <td>{{ order.createdAt | date:'short' }}</td>
+            <td>{{ formatDateTime(order.createdAt) }}</td>
             <td>
               <button 
                 *ngIf="order.orderGroupId && !order.isGroupMember" 
@@ -139,6 +141,20 @@
               <span *ngIf="!order.orderGroupId && !order.isGroupMember">-</span>
               <span *ngIf="order.isGroupMember" class="group-indicator">Group Member</span>
             </td>
+            <td>
+              <span class="event-count" [title]="'Total events: ' + (order.eventCount || 0)">
+                {{ order.eventCount || 0 }} event(s)
+              </span>
+            </td>
+            <td>
+              <button 
+                (click)="viewOrderEvents(order)" 
+                class="btn-link"
+                [disabled]="isLoadingEvents(order)">
+                <span *ngIf="isLoadingEvents(order)">Loading...</span>
+                <span *ngIf="!isLoadingEvents(order)">View Events</span>
+              </button>
+            </td>
           </tr>
         </ng-container>
       </tbody>
@@ -151,6 +167,60 @@
   
   <div class="no-results" *ngIf="!loading && orders.length === 0 && !error">
     No orders found. Try adjusting your search filters.
+  </div>
+</div>
+
+<!-- Order Events Modal -->
+<div class="modal-overlay" *ngIf="showEventsModal" (click)="closeEventsModal()">
+  <div class="modal-content" (click)="$event.stopPropagation()">
+    <div class="modal-header">
+      <h2>Order Events</h2>
+      <button class="close-btn" (click)="closeEventsModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div *ngIf="loadingEvents" class="loading">Loading events...</div>
+      <div *ngIf="!loadingEvents && selectedOrderEvents.length === 0" class="no-results">
+        No events found for this order.
+      </div>
+      <div *ngIf="!loadingEvents && selectedOrderEvents.length > 0" class="events-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Event Time</th>
+              <th>Exec Type</th>
+              <th>Ord Status</th>
+              <th>Exec ID</th>
+              <th>OrderID</th>
+              <th>ClOrdID</th>
+              <th>Symbol</th>
+              <th>Side</th>
+              <th>Qty</th>
+              <th>Price</th>
+              <th>Cum Qty</th>
+              <th>Avg Px</th>
+              <th>Text</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let event of selectedOrderEvents">
+              <td>{{ formatDateTime(event.eventTime) }}</td>
+              <td>{{ getExecTypeLabel(event.execType) }}</td>
+              <td>{{ getOrdStatusLabel(event.ordStatus) }}</td>
+              <td>{{ event.fixExecId || 'N/A' }}</td>
+              <td>{{ event.fixOrderId || 'N/A' }}</td>
+              <td>{{ event.fixClOrdId || 'N/A' }}</td>
+              <td>{{ event.symbol || 'N/A' }}</td>
+              <td>{{ getSideLabel(event.side) }}</td>
+              <td>{{ event.orderQty || 'N/A' }}</td>
+              <td>{{ event.price || 'N/A' }}</td>
+              <td>{{ event.cumQty || 'N/A' }}</td>
+              <td>{{ event.avgPx || 'N/A' }}</td>
+              <td>{{ event.text || '-' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </div>
 

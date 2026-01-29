@@ -6,16 +6,19 @@ import com.longvin.trading.entities.accounts.AccountType;
 import com.longvin.trading.entities.orders.Order;
 import com.longvin.trading.entities.orders.OrderEvent;
 import com.longvin.trading.entities.orders.OrderGroup;
+import com.longvin.trading.repository.OrderEventRepository;
 import com.longvin.trading.repository.OrderGroupRepository;
 import com.longvin.trading.repository.OrderRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import quickfix.SessionID;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.Executor;
 
 /**
  * Service for managing order persistence and order events.
@@ -28,14 +31,20 @@ public class OrderService {
 
     private final OrderRepository orderRepository;
     private final OrderGroupRepository orderGroupRepository;
+    private final OrderEventRepository orderEventRepository;
     private final AccountCacheService accountCacheService;
+    private final Executor orderMirroringExecutor;
 
     public OrderService(OrderRepository orderRepository, 
                        OrderGroupRepository orderGroupRepository,
-                       AccountCacheService accountCacheService) {
+                       OrderEventRepository orderEventRepository,
+                       AccountCacheService accountCacheService,
+                       @Qualifier("orderMirroringExecutor") Executor orderMirroringExecutor) {
         this.orderRepository = orderRepository;
         this.orderGroupRepository = orderGroupRepository;
+        this.orderEventRepository = orderEventRepository;
         this.accountCacheService = accountCacheService;
+        this.orderMirroringExecutor = orderMirroringExecutor;
     }
 
     /**
@@ -104,6 +113,9 @@ public class OrderService {
             log.info("Created new order: ClOrdID={}, OrderID={}, Account={}, Symbol={}, OrderGroupId={}", 
                     order.getFixClOrdId(), order.getFixOrderId(), 
                     order.getAccount().getAccountNumber(), order.getSymbol(), orderGroup.getId());
+            
+            // Link order to any existing events that were created before the order (event-driven)
+            linkOrderToEvents(order);
         }
         
         // Update order fields from context
@@ -167,10 +179,11 @@ public class OrderService {
 
     /**
      * Create OrderEvent from ExecutionReportContext.
+     * Order can be null for event-driven architecture.
      */
-    private void createOrderEvent(Order order, ExecutionReportContext context, SessionID sessionID) {
+    private OrderEvent createOrderEvent(Order order, ExecutionReportContext context, SessionID sessionID) {
         OrderEvent event = OrderEvent.builder()
-                .order(order)
+                .order(order) // Can be null - event can exist independently
                 .fixExecId(context.getOrderID() != null ? context.getOrderID() : 
                         context.getClOrdID() + "-" + System.currentTimeMillis()) // Use OrderID as ExecID, fallback to ClOrdID + timestamp
                 .execType(context.getExecType())
@@ -196,9 +209,94 @@ public class OrderService {
                 .sessionId(sessionID != null ? sessionID.toString() : null)
                 .build();
         
-        order.addEvent(event);
-        log.debug("Created order event: ClOrdID={}, ExecType={}, OrdStatus={}", 
-                context.getClOrdID(), context.getExecType(), context.getOrdStatus());
+        // Save event directly (event-driven: events can exist independently of orders)
+        event = orderEventRepository.save(event);
+        
+        // If order exists, link the event to it
+        if (order != null) {
+            order.addEvent(event);
+            orderRepository.save(order);
+        }
+        
+        log.debug("Created order event: ClOrdID={}, ExecType={}, OrdStatus={}, OrderId={}", 
+                context.getClOrdID(), context.getExecType(), context.getOrdStatus(), 
+                order != null ? order.getId() : "null");
+        
+        return event;
+    }
+
+    /**
+     * Create OrderEvent directly from ExecutionReportContext without requiring an order.
+     * This is the core method for event-driven architecture.
+     * Events can be created even if the order doesn't exist yet.
+     * 
+     * Events are linked to orders using ClOrdID (not OrderID) because:
+     * - ClOrdID is always present in ExecutionReports
+     * - OrderID may not be present in the first "New" ExecutionReport
+     * - ClOrdID is controlled by us (client), making it reliable for linking
+     * 
+     * @param context ExecutionReportContext containing event information
+     * @param sessionID FIX session ID
+     * @return Created OrderEvent
+     */
+    @Transactional
+    public OrderEvent createEventFromExecutionReport(ExecutionReportContext context, SessionID sessionID) {
+        // Try to find the order if it exists, but don't require it
+        // Use ClOrdID for linking (not OrderID) because ClOrdID is always present
+        Order order = null;
+        if (context.getClOrdID() != null) {
+            order = findOrderByClOrdId(context.getClOrdID());
+        }
+        
+        // Create event (order can be null)
+        OrderEvent event = createOrderEvent(order, context, sessionID);
+        
+        log.info("Created event from ExecutionReport (event-driven): ClOrdID={}, OrderID={}, ExecType={}, OrdStatus={}, OrderExists={}", 
+                context.getClOrdID(), context.getOrderID(), context.getExecType(), context.getOrdStatus(), 
+                order != null);
+        
+        return event;
+    }
+    
+    /**
+     * Link an existing order to events that were created before the order existed.
+     * This is used in event-driven architecture when orders are created after events.
+     * 
+     * @param order The order to link to events
+     * @return Number of events linked
+     */
+    @Transactional
+    public int linkOrderToEvents(Order order) {
+        if (order.getFixClOrdId() == null) {
+            log.warn("Order has no ClOrdID, cannot link to events. OrderId={}", order.getId());
+            return 0;
+        }
+        
+        // Find all events for this ClOrdID that don't have an order linked yet
+        List<OrderEvent> unlinkedEvents = orderEventRepository.findByFixClOrdIdOrderByEventTimeAsc(order.getFixClOrdId())
+                .stream()
+                .filter(event -> event.getOrder() == null)
+                .toList();
+        
+        if (unlinkedEvents.isEmpty()) {
+            log.debug("No unlinked events found for ClOrdID={}, OrderId={}", order.getFixClOrdId(), order.getId());
+            return 0;
+        }
+        
+        // Link events to order
+        for (OrderEvent event : unlinkedEvents) {
+            event.setOrder(order);
+            orderEventRepository.save(event);
+        }
+        
+        // Update order's events collection
+        order.getEvents().addAll(unlinkedEvents);
+        orderRepository.save(order);
+        
+        log.info("Linked {} events to order: ClOrdID={}, OrderId={}", 
+                unlinkedEvents.size(), order.getFixClOrdId(), order.getId());
+        
+        return unlinkedEvents.size();
     }
 
     /**
@@ -636,6 +734,161 @@ public class OrderService {
             List<Order> orders = orderRepository.findByFixClOrdIdOrderByCreatedAtDesc(clOrdId);
             return !orders.isEmpty();
         }
+    }
+
+    /**
+     * Asynchronously create shadow account order with "Staged" event.
+     * This is called after sending the FIX message, non-blocking.
+     * Creates the order with ExecType='0', OrdStatus='0' and a "Staged" event.
+     * 
+     * @param primaryOrderClOrdId The ClOrdID of the primary order
+     * @param shadowAccount The shadow account
+     * @param shadowClOrdId The ClOrdID for the shadow order
+     * @param symbol Order symbol
+     * @param side Order side
+     * @param ordType Order type
+     * @param orderQty Order quantity
+     * @param price Order price (nullable)
+     * @param stopPx Stop price (nullable)
+     * @param timeInForce Time in force
+     * @param exDestination Route/destination
+     * @param sessionID FIX session ID
+     */
+    public void createShadowOrderWithStagedEventAsync(String primaryOrderClOrdId, Account shadowAccount,
+                                                      String shadowClOrdId, String symbol, Character side,
+                                                      Character ordType, java.math.BigDecimal orderQty,
+                                                      java.math.BigDecimal price, java.math.BigDecimal stopPx,
+                                                      Character timeInForce, String exDestination, SessionID sessionID) {
+        orderMirroringExecutor.execute(() -> {
+            try {
+                createShadowOrderWithStagedEvent(primaryOrderClOrdId, shadowAccount, shadowClOrdId, symbol, side,
+                        ordType, orderQty, price, stopPx, timeInForce, exDestination, sessionID);
+            } catch (Exception e) {
+                log.error("Error creating shadow order with Staged event asynchronously: ShadowClOrdID={}, Error={}", 
+                        shadowClOrdId, e.getMessage(), e);
+            }
+        });
+    }
+
+    /**
+     * Create shadow account order with "Staged" event (transactional).
+     * This is the actual implementation called by the async method.
+     */
+    @Transactional
+    private void createShadowOrderWithStagedEvent(String primaryOrderClOrdId, Account shadowAccount,
+                                                  String shadowClOrdId, String symbol, Character side,
+                                                  Character ordType, java.math.BigDecimal orderQty,
+                                                  java.math.BigDecimal price, java.math.BigDecimal stopPx,
+                                                  Character timeInForce, String exDestination, SessionID sessionID) {
+        // Find primary order to get its OrderGroup
+        Order primaryOrder = findPrimaryOrderByClOrdId(primaryOrderClOrdId);
+        if (primaryOrder == null) {
+            log.warn("Primary order not found for ClOrdID={}, cannot create shadow order. ShadowClOrdID={}", 
+                    primaryOrderClOrdId, shadowClOrdId);
+            return;
+        }
+        OrderGroup orderGroup = primaryOrder.getOrderGroup();
+        
+        if (orderGroup == null) {
+            log.warn("Primary order has no OrderGroup, cannot link shadow order. PrimaryClOrdID={}, ShadowClOrdID={}", 
+                    primaryOrderClOrdId, shadowClOrdId);
+            return;
+        }
+        
+        // Check if shadow order already exists
+        Optional<Order> existingShadowOrderOpt = orderRepository.findByFixClOrdId(shadowClOrdId);
+        if (existingShadowOrderOpt.isPresent()) {
+            log.debug("Shadow order already exists: ShadowClOrdID={}", shadowClOrdId);
+            return;
+        }
+        
+        // Create shadow order
+        Order shadowOrder = Order.builder()
+                .fixClOrdId(shadowClOrdId)
+                .fixOrderId(null) // Will be set when ExecutionReport is received
+                .account(shadowAccount)
+                .orderGroup(orderGroup)
+                .symbol(symbol)
+                .side(side)
+                .ordType(ordType)
+                .orderQty(orderQty)
+                .price(price)
+                .stopPx(stopPx)
+                .timeInForce(timeInForce)
+                .exDestination(exDestination)
+                .execType('0') // NEW
+                .ordStatus('0') // NEW
+                .build();
+        
+        // Link to OrderGroup
+        orderGroup.addOrder(shadowOrder);
+        
+        // Save shadow order
+        shadowOrder = orderRepository.save(shadowOrder);
+        
+        // Link order to any existing events that were created before the order (event-driven)
+        linkOrderToEvents(shadowOrder);
+        
+        // Create "Staged" event (ExecType='0', OrdStatus='0', text="Staged")
+        OrderEvent stagedEvent = OrderEvent.builder()
+                .order(shadowOrder) // Link to order since it exists now
+                .fixExecId(shadowClOrdId + "-STAGED-" + System.currentTimeMillis())
+                .execType('0') // NEW
+                .ordStatus('0') // NEW
+                .fixOrderId(null)
+                .fixClOrdId(shadowClOrdId)
+                .symbol(symbol)
+                .side(side)
+                .ordType(ordType)
+                .timeInForce(timeInForce)
+                .orderQty(orderQty)
+                .price(price)
+                .stopPx(stopPx)
+                .account(shadowAccount.getAccountNumber())
+                .text("Staged")
+                .sessionId(sessionID != null ? sessionID.toString() : null)
+                .build();
+        
+        // Save event directly (event-driven: events can exist independently)
+        stagedEvent = orderEventRepository.save(stagedEvent);
+        
+        // Link event to order
+        shadowOrder.addEvent(stagedEvent);
+        orderRepository.save(shadowOrder);
+        
+        log.info("Created shadow account order with Staged event: ShadowClOrdID={}, ShadowAccount={}, PrimaryClOrdID={}, OrderGroupId={}", 
+                shadowClOrdId, shadowAccount.getAccountNumber(), primaryOrderClOrdId, orderGroup.getId());
+    }
+
+    /**
+     * Create event for a shadow order (event-driven: order not required).
+     * Used in NewOrderHandler when broker confirms the shadow order.
+     * Creates event with ExecType='0', OrdStatus='0' (New).
+     * The order can be created later and linked to this event.
+     * 
+     * @param context ExecutionReportContext containing order information
+     * @param sessionID FIX session ID
+     * @return Created OrderEvent
+     */
+    @Transactional
+    public OrderEvent createEventForShadowOrder(ExecutionReportContext context, SessionID sessionID) {
+        // Event-driven: create event directly, order is optional
+        return createEventFromExecutionReport(context, sessionID);
+    }
+
+    /**
+     * Create event for any order (primary or shadow) from ExecutionReport (event-driven).
+     * The order is optional - events can exist independently.
+     * Used in FillOrderHandler when fills arrive.
+     * 
+     * @param context ExecutionReportContext containing order information
+     * @param sessionID FIX session ID
+     * @return Created OrderEvent
+     */
+    @Transactional
+    public OrderEvent createEventForOrder(ExecutionReportContext context, SessionID sessionID) {
+        // Event-driven: create event directly, order is optional
+        return createEventFromExecutionReport(context, sessionID);
     }
 }
 

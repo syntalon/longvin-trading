@@ -133,29 +133,6 @@ public class LocateResponseHandler implements ExecutionReportHandler {
         // Calculate order quantity
         BigDecimal orderQty = context.getOfferSize() != null ? context.getOfferSize() : BigDecimal.valueOf(100);
         
-        // Persist shadow account order BEFORE sending FIX message
-        // This ensures the order exists in DB before any ExecutionReport arrives
-        try {
-            orderService.createShadowAccountOrder(
-                    primaryClOrdId, // Primary order ClOrdID
-                    shadowAccountEntity,
-                    locateClOrdId, // Shadow order ClOrdID
-                    context.getSymbol(),
-                    '1', // BUY for locate orders
-                    '1', // MARKET
-                    orderQty,
-                    null, // No price for market orders
-                    null, // No stop price
-                    '0', // DAY
-                    locateRoute
-            );
-        } catch (Exception e) {
-            log.error("Error persisting shadow locate order before sending: ShadowClOrdID={}, QuoteReqID={}, Error={}", 
-                    locateClOrdId, quoteReqID, e.getMessage(), e);
-            // Don't send order if persistence fails
-            return;
-        }
-        
         Map<String, Object> orderParams = new HashMap<>();
         orderParams.put("clOrdID", locateClOrdId);
         orderParams.put("side", '1'); // BUY for locate orders
@@ -167,8 +144,25 @@ public class LocateResponseHandler implements ExecutionReportHandler {
         orderParams.put("timeInForce", '0'); // DAY
 
         try {
-            // Send order AFTER it's persisted
+            // Send order first
             fixMessageSender.sendNewOrderSingle(sessionID, orderParams);
+            
+            // Create shadow order with "Staged" event asynchronously (non-blocking)
+            orderService.createShadowOrderWithStagedEventAsync(
+                    primaryClOrdId, // Primary order ClOrdID
+                    shadowAccountEntity,
+                    locateClOrdId, // Shadow order ClOrdID
+                    context.getSymbol(),
+                    '1', // BUY for locate orders
+                    '1', // MARKET
+                    orderQty,
+                    null, // No price for market orders
+                    null, // No stop price
+                    '0', // DAY
+                    locateRoute,
+                    sessionID
+            );
+            
             log.info("Locate order (3.14) sent to shadow account {}: ClOrdID={}, QuoteReqID={}, Symbol={}, Route={}",
                     shadowAccount, locateClOrdId, quoteReqID, context.getSymbol(), locateRoute);
         } catch (Exception e) {

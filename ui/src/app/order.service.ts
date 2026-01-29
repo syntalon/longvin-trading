@@ -109,5 +109,45 @@ export class OrderService {
   getOrdersByGroup(orderGroupId: string): Observable<Order[]> {
     return this.http.get<Order[]>(`${this.apiUrl}/group/${orderGroupId}`);
   }
+
+  getOrderEvents(orderId?: string, fixClOrdId?: string): Observable<OrderEvent[]> {
+    let httpParams = new HttpParams();
+    if (orderId) {
+      httpParams = httpParams.set('orderId', orderId);
+    }
+    if (fixClOrdId) {
+      httpParams = httpParams.set('fixClOrdId', fixClOrdId);
+    }
+    return this.http.get<OrderEvent[]>(`${this.apiUrl}/events`, { params: httpParams });
+  }
+}
+
+export interface OrderEvent {
+  id?: string;
+  orderId?: string;
+  fixExecId?: string;
+  execType?: string;
+  ordStatus?: string;
+  fixOrderId?: string;
+  fixClOrdId?: string;
+  fixOrigClOrdId?: string;
+  symbol?: string;
+  side?: string;
+  ordType?: string;
+  timeInForce?: string;
+  orderQty?: number;
+  price?: number;
+  stopPx?: number;
+  lastPx?: number;
+  lastQty?: number;
+  cumQty?: number;
+  leavesQty?: number;
+  avgPx?: number;
+  account?: string;
+  transactTime?: string;
+  text?: string;
+  eventTime?: string;
+  rawFixMessage?: string;
+  sessionId?: string;
 }
 

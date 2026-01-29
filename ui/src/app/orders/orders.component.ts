@@ -1,7 +1,7 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { OrderService, Order, OrderSearchParams } from '../order.service';
+import { OrderService, Order, OrderSearchParams, OrderEvent } from '../order.service';
 
 @Component({
   selector: 'app-orders',
@@ -19,6 +19,12 @@ export class OrdersComponent implements OnInit {
   expandedGroups: Set<string> = new Set();
   groupOrders: Map<string, Order[]> = new Map();
   loadingGroups: Set<string> = new Set();
+  
+  // Track order events modal
+  showEventsModal: boolean = false;
+  selectedOrderEvents: OrderEvent[] = [];
+  loadingEvents: boolean = false;
+  loadingEventsForOrder: Set<string> = new Set();
   
   // Search filters
   searchParams: OrderSearchParams = {
@@ -239,6 +245,80 @@ export class OrdersComponent implements OnInit {
       'B': 'Locate Offer'
     };
     return statusMap[ordStatus] || ordStatus;
+  }
+
+  formatDateTime(dateTime: string | undefined): string {
+    if (!dateTime) return 'N/A';
+    try {
+      const date = new Date(dateTime);
+      // Format: M/d/yy, h:mm:ss.SSS AM/PM
+      const month = date.getMonth() + 1;
+      const day = date.getDate();
+      const year = date.getFullYear().toString().slice(-2);
+      const hours = date.getHours();
+      const minutes = date.getMinutes().toString().padStart(2, '0');
+      const seconds = date.getSeconds().toString().padStart(2, '0');
+      const milliseconds = date.getMilliseconds().toString().padStart(3, '0');
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      const displayHours = hours % 12 || 12;
+      
+      return `${month}/${day}/${year}, ${displayHours}:${minutes}:${seconds}.${milliseconds} ${ampm}`;
+    } catch (e) {
+      return dateTime;
+    }
+  }
+
+  viewOrderEvents(order: Order) {
+    if (!order.id && !order.fixClOrdId) {
+      console.warn('Order has no ID or ClOrdID, cannot load events');
+      return;
+    }
+    
+    this.showEventsModal = true;
+    this.loadingEvents = true;
+    this.selectedOrderEvents = [];
+    
+    const orderKey = order.id || order.fixClOrdId || '';
+    this.loadingEventsForOrder.add(orderKey);
+    
+    this.orderService.getOrderEvents(order.id, order.fixClOrdId).subscribe({
+      next: (events) => {
+        this.selectedOrderEvents = events || [];
+        this.loadingEvents = false;
+        this.loadingEventsForOrder.delete(orderKey);
+        console.log(`Loaded ${this.selectedOrderEvents.length} event(s) for order ${order.fixClOrdId}`);
+      },
+      error: (err) => {
+        console.error('Error loading order events:', err);
+        this.loadingEvents = false;
+        this.loadingEventsForOrder.delete(orderKey);
+        this.selectedOrderEvents = [];
+      }
+    });
+  }
+
+  closeEventsModal() {
+    this.showEventsModal = false;
+    this.selectedOrderEvents = [];
+    this.loadingEvents = false;
+  }
+
+  isLoadingEvents(order: Order): boolean {
+    const orderKey = order.id || order.fixClOrdId || '';
+    return this.loadingEventsForOrder.has(orderKey);
+  }
+
+  getExecTypeLabel(execType: string | undefined): string {
+    if (!execType) return 'N/A';
+    const typeMap: { [key: string]: string } = {
+      '0': 'New',
+      '1': 'Partial Fill',
+      '2': 'Fill',
+      '4': 'Canceled',
+      '5': 'Replaced',
+      '8': 'Rejected'
+    };
+    return typeMap[execType] || execType;
   }
 }
 
