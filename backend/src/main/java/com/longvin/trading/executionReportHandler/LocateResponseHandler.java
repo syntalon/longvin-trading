@@ -1,15 +1,20 @@
 package com.longvin.trading.executionReportHandler;
 
 import com.longvin.trading.dto.messages.ExecutionReportContext;
+import com.longvin.trading.entities.accounts.Account;
 import com.longvin.trading.fixSender.FixMessageSender;
+import com.longvin.trading.service.AccountCacheService;
+import com.longvin.trading.service.OrderService;
 import com.longvin.trading.service.ShortOrderProcessingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import quickfix.SessionID;
 
+import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Handler for Short Locate Quote Response (MsgType=S, section 3.12).
@@ -30,11 +35,17 @@ public class LocateResponseHandler implements ExecutionReportHandler {
 
     private final ShortOrderProcessingService shortOrderProcessingService;
     private final FixMessageSender fixMessageSender;
+    private final OrderService orderService;
+    private final AccountCacheService accountCacheService;
 
     public LocateResponseHandler(ShortOrderProcessingService shortOrderProcessingService,
-                                 FixMessageSender fixMessageSender) {
+                                 FixMessageSender fixMessageSender,
+                                 OrderService orderService,
+                                 AccountCacheService accountCacheService) {
         this.shortOrderProcessingService = shortOrderProcessingService;
         this.fixMessageSender = fixMessageSender;
+        this.orderService = orderService;
+        this.accountCacheService = accountCacheService;
     }
 
     @Override
@@ -110,17 +121,53 @@ public class LocateResponseHandler implements ExecutionReportHandler {
 
         String locateClOrdId = "COPY-" + shadowAccount + "-" + primaryClOrdId;
         
+        // Find shadow account
+        Optional<Account> shadowAccountOpt = accountCacheService.findByAccountNumber(shadowAccount);
+        if (shadowAccountOpt.isEmpty()) {
+            log.error("Shadow account not found: {}, cannot create locate order. QuoteReqID={}", 
+                    shadowAccount, quoteReqID);
+            return;
+        }
+        Account shadowAccountEntity = shadowAccountOpt.get();
+        
+        // Calculate order quantity
+        BigDecimal orderQty = context.getOfferSize() != null ? context.getOfferSize() : BigDecimal.valueOf(100);
+        
+        // Persist shadow account order BEFORE sending FIX message
+        // This ensures the order exists in DB before any ExecutionReport arrives
+        try {
+            orderService.createShadowAccountOrder(
+                    primaryClOrdId, // Primary order ClOrdID
+                    shadowAccountEntity,
+                    locateClOrdId, // Shadow order ClOrdID
+                    context.getSymbol(),
+                    '1', // BUY for locate orders
+                    '1', // MARKET
+                    orderQty,
+                    null, // No price for market orders
+                    null, // No stop price
+                    '0', // DAY
+                    locateRoute
+            );
+        } catch (Exception e) {
+            log.error("Error persisting shadow locate order before sending: ShadowClOrdID={}, QuoteReqID={}, Error={}", 
+                    locateClOrdId, quoteReqID, e.getMessage(), e);
+            // Don't send order if persistence fails
+            return;
+        }
+        
         Map<String, Object> orderParams = new HashMap<>();
         orderParams.put("clOrdID", locateClOrdId);
         orderParams.put("side", '1'); // BUY for locate orders
         orderParams.put("symbol", context.getSymbol());
-        orderParams.put("orderQty", context.getOfferSize() != null ? context.getOfferSize().intValue() : 100); // Use offer size or default
+        orderParams.put("orderQty", orderQty.intValue());
         orderParams.put("account", shadowAccount);
         orderParams.put("exDestination", locateRoute); // Locate route
         orderParams.put("ordType", '1'); // MARKET
         orderParams.put("timeInForce", '0'); // DAY
 
         try {
+            // Send order AFTER it's persisted
             fixMessageSender.sendNewOrderSingle(sessionID, orderParams);
             log.info("Locate order (3.14) sent to shadow account {}: ClOrdID={}, QuoteReqID={}, Symbol={}, Route={}",
                     shadowAccount, locateClOrdId, quoteReqID, context.getSymbol(), locateRoute);

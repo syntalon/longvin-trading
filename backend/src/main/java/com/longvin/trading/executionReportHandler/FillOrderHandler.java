@@ -440,13 +440,8 @@ public class FillOrderHandler implements ExecutionReportHandler {
                 clOrdId, primaryAccount.getId(), shadowAccountNumber, shadowAccount.getId(), 
                 primaryQty, copyQty, originalRoute, locateRoute, rule.getId());
         
-        fixMessageSender.sendNewOrderSingle(initiatorSessionID, orderParams);
-        
-        log.info("Locate order (3.14) sent with rule: ClOrdID={}, PrimaryAccountId={}, ShadowAccount={}, ShadowAccountId={}, " +
-                "CopyQty={}, LocateRoute={}",
-                clOrdId, primaryAccount.getId(), shadowAccountNumber, shadowAccount.getId(), copyQty, locateRoute);
-        
-        // Persist shadow account order
+        // Persist shadow account order BEFORE sending FIX message
+        // This ensures the order exists in DB before any ExecutionReport arrives
         try {
             orderService.createShadowAccountOrder(
                     context.getClOrdID(), // Primary order ClOrdID
@@ -462,9 +457,18 @@ public class FillOrderHandler implements ExecutionReportHandler {
                     locateRoute
             );
         } catch (Exception e) {
-            log.error("Error persisting shadow locate order: ShadowClOrdID={}, Error={}", 
+            log.error("Error persisting shadow locate order before sending: ShadowClOrdID={}, Error={}", 
                     clOrdId, e.getMessage(), e);
+            // Don't send order if persistence fails
+            return;
         }
+        
+        // Send order AFTER it's persisted
+        fixMessageSender.sendNewOrderSingle(initiatorSessionID, orderParams);
+        
+        log.info("Locate order (3.14) sent with rule: ClOrdID={}, PrimaryAccountId={}, ShadowAccount={}, ShadowAccountId={}, " +
+                "CopyQty={}, LocateRoute={}",
+                clOrdId, primaryAccount.getId(), shadowAccountNumber, shadowAccount.getId(), copyQty, locateRoute);
     }
 
     /**
@@ -598,14 +602,8 @@ public class FillOrderHandler implements ExecutionReportHandler {
                 clOrdId, primaryAccount.getId(), shadowAccountNumber, shadowAccount.getId(), 
                 primaryQty, copyQty, originalRoute, targetRoute, isLocateOrder, rule.getId());
         
-        // Send order
-        fixMessageSender.sendNewOrderSingle(initiatorSessionID, orderParams);
-        
-        log.info("Copy order sent with rule: ClOrdID={}, PrimaryAccountId={}, ShadowAccount={}, ShadowAccountId={}, " +
-                "CopyQty={}, TargetRoute={}",
-                clOrdId, primaryAccount.getId(), shadowAccountNumber, shadowAccount.getId(), copyQty, targetRoute);
-        
-        // Persist shadow account order
+        // Persist shadow account order BEFORE sending FIX message
+        // This ensures the order exists in DB before any ExecutionReport arrives
         try {
             orderService.createShadowAccountOrder(
                     context.getClOrdID(), // Primary order ClOrdID
@@ -621,9 +619,18 @@ public class FillOrderHandler implements ExecutionReportHandler {
                     targetRoute
             );
         } catch (Exception e) {
-            log.error("Error persisting shadow account order: ShadowClOrdID={}, Error={}", 
+            log.error("Error persisting shadow account order before sending: ShadowClOrdID={}, Error={}", 
                     clOrdId, e.getMessage(), e);
+            // Don't send order if persistence fails
+            return;
         }
+        
+        // Send order AFTER it's persisted
+        fixMessageSender.sendNewOrderSingle(initiatorSessionID, orderParams);
+        
+        log.info("Copy order sent with rule: ClOrdID={}, PrimaryAccountId={}, ShadowAccount={}, ShadowAccountId={}, " +
+                "CopyQty={}, TargetRoute={}",
+                clOrdId, primaryAccount.getId(), shadowAccountNumber, shadowAccount.getId(), copyQty, targetRoute);
     }
 
 

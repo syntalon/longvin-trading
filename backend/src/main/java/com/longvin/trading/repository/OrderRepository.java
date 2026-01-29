@@ -32,6 +32,12 @@ public interface OrderRepository extends JpaRepository<Order, UUID> {
     Optional<Order> findByFixClOrdId(String fixClOrdId);
     
     /**
+     * Find all orders by FIX ClOrdID, ordered by creation time descending.
+     * Used to handle cases where duplicates exist (should not happen, but handles gracefully).
+     */
+    List<Order> findByFixClOrdIdOrderByCreatedAtDesc(String fixClOrdId);
+    
+    /**
      * Find order by FIX OrigClOrdID (for replaced/canceled orders).
      */
     Optional<Order> findByFixOrigClOrdId(String fixOrigClOrdId);

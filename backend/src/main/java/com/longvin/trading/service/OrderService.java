@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import quickfix.SessionID;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -79,12 +80,20 @@ public class OrderService {
             order = existingOrderOpt.get();
             log.debug("Order already exists, updating: ClOrdID={}, OrderID={}", 
                     context.getClOrdID(), context.getOrderID());
+            
+            // Ensure order has a group (one-to-one mapping: one primary order = one group)
+            if (order.getOrderGroup() == null) {
+                OrderGroup orderGroup = findOrCreateOrderGroup(order, account);
+                orderGroup.addOrder(order);
+                log.info("Linked existing order to OrderGroup: ClOrdID={}, OrderGroupId={}", 
+                        order.getFixClOrdId(), orderGroup.getId());
+            }
         } else {
             // Create new order
             order = buildOrderFromContext(context);
             order.setAccount(account);
             
-            // Create or find OrderGroup for this primary order
+            // Create OrderGroup for this primary order (one-to-one mapping)
             OrderGroup orderGroup = findOrCreateOrderGroup(order, account);
             
             // Link order to group (this sets order.orderGroup and adds order to group.orders)
@@ -194,26 +203,37 @@ public class OrderService {
 
     /**
      * Find or create OrderGroup for a primary order.
-     * Uses the account's strategyKey if available, otherwise generates one.
+     * Each primary order gets its own unique OrderGroup (one-to-one mapping).
+     * All shadow orders copied from this primary order will be added to this group.
      */
     private OrderGroup findOrCreateOrderGroup(Order order, Account account) {
-        // Use strategyKey from account if available
+        // First, check if this order already has a group assigned
+        if (order.getOrderGroup() != null) {
+            log.debug("Order already has OrderGroup: OrderGroupId={}, PrimaryOrderClOrdID={}", 
+                    order.getOrderGroup().getId(), order.getFixClOrdId());
+            return order.getOrderGroup();
+        }
+        
+        // If order has an ID, check if a group exists for this primary order
+        if (order.getId() != null) {
+            Optional<OrderGroup> existingGroupByOrder = orderGroupRepository.findByPrimaryOrderId(order.getId());
+            if (existingGroupByOrder.isPresent()) {
+                OrderGroup group = existingGroupByOrder.get();
+                log.debug("Found existing OrderGroup for primary order: OrderGroupId={}, PrimaryOrderClOrdID={}", 
+                        group.getId(), order.getFixClOrdId());
+                return group;
+            }
+        }
+        
+        // Use strategyKey from account if available, otherwise generate one
+        // This is for informational purposes only, not for grouping
         String strategyKey = account.getStrategyKey();
         if (strategyKey == null || strategyKey.isBlank()) {
-            // Generate default strategy key based on account number
-            strategyKey = "PRIMARY_" + account.getAccountNumber();
+            // Generate default strategy key based on account number and order ClOrdID
+            strategyKey = account.getAccountNumber() + "_" + order.getFixClOrdId();
         }
         
-        // Try to find existing group by strategy key
-        Optional<OrderGroup> existingGroup = orderGroupRepository.findByStrategyKey(strategyKey);
-        if (existingGroup.isPresent()) {
-            OrderGroup group = existingGroup.get();
-            log.debug("Found existing OrderGroup: strategyKey={}, OrderGroupId={}", 
-                    strategyKey, group.getId());
-            return group;
-        }
-        
-        // Create new OrderGroup
+        // Create new OrderGroup - one per primary order (one-to-one mapping)
         OrderGroup group = OrderGroup.builder()
                 .strategyKey(strategyKey)
                 .primaryOrder(order)
@@ -224,8 +244,8 @@ public class OrderService {
         
         group = orderGroupRepository.save(group);
         
-        log.info("Created new OrderGroup: strategyKey={}, OrderGroupId={}, PrimaryOrderClOrdID={}", 
-                strategyKey, group.getId(), order.getFixClOrdId());
+        log.info("Created new OrderGroup for primary order: OrderGroupId={}, PrimaryOrderClOrdID={}, StrategyKey={}", 
+                group.getId(), order.getFixClOrdId(), strategyKey);
         
         return group;
     }
@@ -254,14 +274,13 @@ public class OrderService {
                                           java.math.BigDecimal price, java.math.BigDecimal stopPx,
                                           Character timeInForce, String exDestination) {
         // Find primary order to get its OrderGroup
-        Optional<Order> primaryOrderOpt = orderRepository.findByFixClOrdId(primaryOrderClOrdId);
-        if (primaryOrderOpt.isEmpty()) {
+        // Handle potential duplicates by getting the first one (most recent)
+        Order primaryOrder = findPrimaryOrderByClOrdId(primaryOrderClOrdId);
+        if (primaryOrder == null) {
             log.warn("Primary order not found for ClOrdID={}, cannot create shadow order. ShadowClOrdID={}", 
                     primaryOrderClOrdId, shadowClOrdId);
             return null;
         }
-        
-        Order primaryOrder = primaryOrderOpt.get();
         OrderGroup orderGroup = primaryOrder.getOrderGroup();
         
         if (orderGroup == null) {
@@ -346,13 +365,10 @@ public class OrderService {
             return null;
         }
         
-        // Find shadow order by ClOrdID
-        Optional<Order> orderOpt = orderRepository.findByFixClOrdId(context.getClOrdID());
-        
-        Order order;
-        if (orderOpt.isPresent()) {
+        // Find shadow order by ClOrdID (handle duplicates)
+        Order order = findOrderByClOrdId(context.getClOrdID());
+        if (order != null) {
             // Order exists - update it
-            order = orderOpt.get();
             log.debug("Copy order exists, updating: ClOrdID={}, OrderID={}", 
                     context.getClOrdID(), context.getOrderID());
         } else {
@@ -367,15 +383,13 @@ public class OrderService {
                 return null;
             }
             
-            // Find primary order to get its OrderGroup
-            Optional<Order> primaryOrderOpt = orderRepository.findByFixClOrdId(primaryClOrdId);
-            if (primaryOrderOpt.isEmpty()) {
+            // Find primary order to get its OrderGroup (handle duplicates)
+            Order primaryOrder = findPrimaryOrderByClOrdId(primaryClOrdId);
+            if (primaryOrder == null) {
                 log.warn("Primary order not found for shadow order: PrimaryClOrdID={}, ShadowClOrdID={}", 
                         primaryClOrdId, context.getClOrdID());
                 return null;
             }
-            
-            Order primaryOrder = primaryOrderOpt.get();
             OrderGroup orderGroup = primaryOrder.getOrderGroup();
             
             if (orderGroup == null) {
@@ -410,6 +424,45 @@ public class OrderService {
                 context.getClOrdID(), context.getOrderID(), context.getExecType(), context.getOrdStatus());
         
         return order;
+    }
+    
+    /**
+     * Find order by ClOrdID, handling potential duplicates.
+     * If duplicates exist, returns the most recent one (by created_at).
+     * 
+     * @param clOrdId The ClOrdID to search for
+     * @return The order, or null if not found
+     */
+    private Order findOrderByClOrdId(String clOrdId) {
+        try {
+            Optional<Order> orderOpt = orderRepository.findByFixClOrdId(clOrdId);
+            if (orderOpt.isPresent()) {
+                return orderOpt.get();
+            }
+        } catch (org.springframework.dao.IncorrectResultSizeDataAccessException e) {
+            // Handle duplicate orders - get the most recent one
+            log.warn("Duplicate orders found for ClOrdID={}, selecting most recent one. Error: {}", 
+                    clOrdId, e.getMessage());
+            List<Order> orders = orderRepository.findByFixClOrdIdOrderByCreatedAtDesc(clOrdId);
+            if (!orders.isEmpty()) {
+                Order selectedOrder = orders.get(0);
+                log.info("Selected most recent order for ClOrdID={}: OrderId={}, CreatedAt={}", 
+                        clOrdId, selectedOrder.getId(), selectedOrder.getCreatedAt());
+                return selectedOrder;
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * Find primary order by ClOrdID, handling potential duplicates.
+     * Alias for findOrderByClOrdId for clarity.
+     * 
+     * @param clOrdId The ClOrdID to search for
+     * @return The primary order, or null if not found
+     */
+    private Order findPrimaryOrderByClOrdId(String clOrdId) {
+        return findOrderByClOrdId(clOrdId);
     }
     
     /**
@@ -485,6 +538,14 @@ public class OrderService {
             order = orderOpt.get();
             log.debug("Primary order exists, updating: ClOrdID={}, OrderID={}", 
                     context.getClOrdID(), context.getOrderID());
+            
+            // Ensure order has a group (one-to-one mapping: one primary order = one group)
+            if (order.getOrderGroup() == null) {
+                OrderGroup orderGroup = findOrCreateOrderGroup(order, account);
+                orderGroup.addOrder(order);
+                log.info("Linked existing primary order to OrderGroup: ClOrdID={}, OrderGroupId={}", 
+                        order.getFixClOrdId(), orderGroup.getId());
+            }
         } else {
             // Order doesn't exist yet (race condition) - create it
             log.info("Primary order not found in database, creating it (race condition). ClOrdID={}, OrderID={}, ExecType={}, OrdStatus={}", 
@@ -493,7 +554,7 @@ public class OrderService {
             order = buildOrderFromContext(context);
             order.setAccount(account);
             
-            // Create or find OrderGroup for this primary order
+            // Create OrderGroup for this primary order (one-to-one mapping)
             OrderGroup orderGroup = findOrCreateOrderGroup(order, account);
             orderGroup.addOrder(order);
             
@@ -568,7 +629,13 @@ public class OrderService {
         if (clOrdId == null || clOrdId.isBlank()) {
             return false;
         }
-        return orderRepository.findByFixClOrdId(clOrdId).isPresent();
+        try {
+            return orderRepository.findByFixClOrdId(clOrdId).isPresent();
+        } catch (org.springframework.dao.IncorrectResultSizeDataAccessException e) {
+            // Handle duplicates - if any exist, return true
+            List<Order> orders = orderRepository.findByFixClOrdIdOrderByCreatedAtDesc(clOrdId);
+            return !orders.isEmpty();
+        }
     }
 }
 
