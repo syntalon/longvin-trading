@@ -1,0 +1,141 @@
+<div class="orders-container">
+  <h1>Order Search</h1>
+  
+  <div class="search-filters">
+    <h2>Search Filters</h2>
+    <div class="filter-row">
+      <div class="filter-group">
+        <label for="accountNumber">Account Number:</label>
+        <input type="text" id="accountNumber" [(ngModel)]="accountNumber" placeholder="e.g., TROS107">
+      </div>
+      
+      <div class="filter-group">
+        <label for="symbol">Symbol:</label>
+        <input type="text" id="symbol" [(ngModel)]="symbol" placeholder="e.g., DRMA">
+      </div>
+      
+      <div class="filter-group">
+        <label for="fixClOrdId">ClOrdID:</label>
+        <input type="text" id="fixClOrdId" [(ngModel)]="fixClOrdId" placeholder="e.g., 12345 or COPY-...">
+      </div>
+      
+      <div class="filter-group">
+        <label for="fixOrderId">OrderID:</label>
+        <input type="text" id="fixOrderId" [(ngModel)]="fixOrderId" placeholder="e.g., 12345">
+      </div>
+    </div>
+    
+    <div class="filter-row">
+      <div class="filter-group">
+        <label for="ordStatus">Order Status:</label>
+        <select id="ordStatus" [(ngModel)]="ordStatus">
+          <option *ngFor="let opt of ordStatusOptions" [value]="opt.value">{{ opt.label }}</option>
+        </select>
+      </div>
+      
+      <div class="filter-group">
+        <label for="execType">Execution Type:</label>
+        <select id="execType" [(ngModel)]="execType">
+          <option *ngFor="let opt of execTypeOptions" [value]="opt.value">{{ opt.label }}</option>
+        </select>
+      </div>
+      
+      <div class="filter-group">
+        <label for="isCopyOrder">Copy Order:</label>
+        <select id="isCopyOrder" [(ngModel)]="isCopyOrder">
+          <option [value]="null">All</option>
+          <option [value]="true">Copy Orders Only</option>
+          <option [value]="false">Primary Orders Only</option>
+        </select>
+      </div>
+    </div>
+    
+    <div class="filter-actions">
+      <button (click)="searchOrders()" [disabled]="loading">Search</button>
+      <button (click)="clearFilters()" [disabled]="loading">Clear</button>
+    </div>
+  </div>
+  
+  <div class="error-message" *ngIf="error">
+    {{ error }}
+  </div>
+  
+  <div class="loading" *ngIf="loading">
+    Loading orders...
+  </div>
+  
+  <div class="orders-table" *ngIf="!loading && orders.length > 0">
+    <table>
+      <thead>
+        <tr>
+          <th>ClOrdID</th>
+          <th>OrderID</th>
+          <th>Account</th>
+          <th>Type</th>
+          <th>Symbol</th>
+          <th>Side</th>
+          <th>Order Type</th>
+          <th>Qty</th>
+          <th>Price</th>
+          <th>Status</th>
+          <th>Cum Qty</th>
+          <th>Avg Px</th>
+          <th>Created</th>
+          <th>Group</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr *ngFor="let order of orders" [class.copy-order]="order.isCopyOrder">
+          <td>
+            <span [title]="order.fixClOrdId || 'N/A'">
+              {{ order.fixClOrdId || 'N/A' }}
+            </span>
+            <span class="copy-badge" *ngIf="order.isCopyOrder">COPY</span>
+          </td>
+          <td>{{ order.fixOrderId || 'N/A' }}</td>
+          <td>
+            <span [title]="order.accountNumber || 'N/A'">
+              {{ order.accountNumber || 'N/A' }}
+            </span>
+            <span class="account-type" *ngIf="order.accountType">
+              ({{ order.accountType }})
+            </span>
+          </td>
+          <td>
+            <span class="order-type-badge" [class.primary]="!order.isCopyOrder" [class.shadow]="order.isCopyOrder">
+              {{ order.isCopyOrder ? 'Shadow' : 'Primary' }}
+            </span>
+          </td>
+          <td>{{ order.symbol || 'N/A' }}</td>
+          <td>{{ getSideLabel(order.side) }}</td>
+          <td>{{ getOrdTypeLabel(order.ordType) }}</td>
+          <td>{{ order.orderQty || 'N/A' }}</td>
+          <td>{{ order.price || 'N/A' }}</td>
+          <td>
+            <span class="status-badge" [class.filled]="order.ordStatus === '2'" [class.partial]="order.ordStatus === '1'">
+              {{ getOrdStatusLabel(order.ordStatus) }}
+            </span>
+          </td>
+          <td>{{ order.cumQty || 'N/A' }}</td>
+          <td>{{ order.avgPx || 'N/A' }}</td>
+          <td>{{ order.createdAt | date:'short' }}</td>
+          <td>
+            <button *ngIf="order.orderGroupId" (click)="viewOrderGroup(order)" class="btn-link">
+              View Group
+            </button>
+            <span *ngIf="!order.orderGroupId">-</span>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    
+    <div class="results-info">
+      Found {{ orders.length }} order(s)
+    </div>
+  </div>
+  
+  <div class="no-results" *ngIf="!loading && orders.length === 0 && !error">
+    No orders found. Try adjusting your search filters.
+  </div>
+</div>
+

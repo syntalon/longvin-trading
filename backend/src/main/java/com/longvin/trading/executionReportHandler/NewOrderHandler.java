@@ -8,6 +8,7 @@ import com.longvin.trading.fix.FixSessionRegistry;
 import com.longvin.trading.fixSender.FixMessageSender;
 import com.longvin.trading.service.AccountCacheService;
 import com.longvin.trading.service.CopyRuleService;
+import com.longvin.trading.service.OrderService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -37,15 +38,18 @@ public class NewOrderHandler implements ExecutionReportHandler {
     private final FixSessionRegistry fixSessionRegistry;
     private final FixMessageSender fixMessageSender;
     private final CopyRuleService copyRuleService;
+    private final OrderService orderService;
     
     public NewOrderHandler(AccountCacheService accountCacheService,
                           FixSessionRegistry fixSessionRegistry,
                           FixMessageSender fixMessageSender,
-                          CopyRuleService copyRuleService) {
+                          CopyRuleService copyRuleService,
+                          OrderService orderService) {
         this.accountCacheService = accountCacheService;
         this.fixSessionRegistry = fixSessionRegistry;
         this.fixMessageSender = fixMessageSender;
         this.copyRuleService = copyRuleService;
+        this.orderService = orderService;
     }
 
     @Override
@@ -59,9 +63,36 @@ public class NewOrderHandler implements ExecutionReportHandler {
                 context.getClOrdID(), context.getOrderID(), context.getSymbol(),
                 context.getSide(), context.getOrderQty());
         
-        // Skip if it's a copy order
+        // Handle copy orders - update order and create event
         if (context.getClOrdID() != null && context.getClOrdID().startsWith("COPY-")) {
-            log.debug("Skipping order copy in new order handler - this is already a copy order. ClOrdID={}", context.getClOrdID());
+            try {
+                orderService.updateCopyOrderAndCreateEvent(context, sessionID);
+                log.info("Copy order updated and event created: ClOrdID={}, OrderID={}, ExecType={}, OrdStatus={}",
+                        context.getClOrdID(), context.getOrderID(), context.getExecType(), context.getOrdStatus());
+            } catch (Exception e) {
+                log.error("Error updating copy order: ClOrdID={}, Account={}, Error={}", 
+                        context.getClOrdID(), context.getAccount(), e.getMessage(), e);
+            }
+            return;
+        }
+        
+        // Persist order (service handles validation for primary accounts)
+        try {
+            orderService.createOrUpdateOrderForPrimaryAccount(context, sessionID);
+            log.info("Order persisted successfully for primary account: ClOrdID={}, OrderID={}, Symbol={}, Side={}, Qty={}",
+                    context.getClOrdID(), context.getOrderID(), context.getSymbol(),
+                    context.getSide(), context.getOrderQty());
+        } catch (Exception e) {
+            log.error("Error persisting order: ClOrdID={}, Account={}, Error={}", 
+                    context.getClOrdID(), context.getAccount(), e.getMessage(), e);
+        }
+
+        // Skip stop limit orders (OrdType='4') - StopPx is not available in ExecutionReport
+        if (context.getOrdType() != null && context.getOrdType() == '4') {
+            log.info("Stop limit order confirmed - NOT copying to shadow accounts (StopPx not available in ExecutionReport). " +
+                            "ClOrdID={}, OrderID={}, Symbol={}, Side={}, Qty={}",
+                    context.getClOrdID(), context.getOrderID(), context.getSymbol(),
+                    context.getSide(), context.getOrderQty());
             return;
         }
         
@@ -77,24 +108,16 @@ public class NewOrderHandler implements ExecutionReportHandler {
                             context.getSide(), context.getOrderQty());
                     copyStopMarketOrderToShadowAccounts(context);
                 } else {
-                    log.debug("Skipping stop market order copy - not a primary account. ClOrdID={}, Account={}", 
+                    log.debug("Skipping stop market order copy - not a primary account. ClOrdID={}, Account={}",
                             context.getClOrdID(), context.getAccount());
                 }
             } else {
-                log.warn("Cannot copy stop market order - Account field missing in ExecutionReport. ClOrdID={}", 
+                log.warn("Cannot copy stop market order - Account field missing in ExecutionReport. ClOrdID={}",
                         context.getClOrdID());
             }
             return;
         }
-        
-        // Skip stop limit orders (OrdType='4') - StopPx is not available in ExecutionReport
-        if (context.getOrdType() != null && context.getOrdType() == '4') {
-            log.info("Stop limit order confirmed - NOT copying to shadow accounts (StopPx not available in ExecutionReport). " +
-                    "ClOrdID={}, OrderID={}, Symbol={}, Side={}, Qty={}",
-                    context.getClOrdID(), context.getOrderID(), context.getSymbol(),
-                    context.getSide(), context.getOrderQty());
-            return;
-        }
+
     }
     
     /**
@@ -223,6 +246,26 @@ public class NewOrderHandler implements ExecutionReportHandler {
         log.info("Stop market order copy sent with rule: ClOrdID={}, PrimaryAccountId={}, ShadowAccount={}, ShadowAccountId={}, " +
                 "CopyQty={}, TargetRoute={}",
                 clOrdId, primaryAccountId, shadowAccountNumber, shadowAccount.getId(), copyQty, targetRoute);
+        
+        // Persist shadow account order
+        try {
+            orderService.createShadowAccountOrder(
+                    context.getClOrdID(), // Primary order ClOrdID
+                    shadowAccount,
+                    clOrdId, // Shadow order ClOrdID
+                    context.getSymbol(),
+                    context.getSide(),
+                    '3', // STOP market order
+                    copyQty,
+                    context.getPrice(),
+                    context.getStopPx(),
+                    timeInForce,
+                    targetRoute
+            );
+        } catch (Exception e) {
+            log.error("Error persisting shadow account order: ShadowClOrdID={}, Error={}", 
+                    clOrdId, e.getMessage(), e);
+        }
     }
 
 }

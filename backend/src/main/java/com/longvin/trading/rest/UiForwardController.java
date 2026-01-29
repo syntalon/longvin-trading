@@ -27,7 +27,9 @@ public class UiForwardController {
         "/copy-rules",
         "/copy-rules/**",
         "/logs",
-        "/logs/**"
+        "/logs/**",
+        "/orders",
+        "/orders/**"
     })
     public String forwardToIndex() {
         return "forward:/index.html";
