@@ -119,6 +119,20 @@ h1 {
           background: #fff3cd;
         }
         
+        &.primary-order {
+          background: #f8f9fa;
+          font-weight: 500;
+        }
+        
+        &.group-member {
+          background: #fff9e6;
+          border-left: 3px solid #ffc107;
+          
+          &:hover {
+            background: #fff3cd;
+          }
+        }
+        
         td {
           padding: 10px 12px;
           font-size: 13px;
@@ -190,9 +204,27 @@ h1 {
   padding: 0;
   font-size: 13px;
   
-  &:hover {
+  &:hover:not(:disabled) {
     color: #0056b3;
   }
+  
+  &:disabled {
+    color: #999;
+    cursor: not-allowed;
+    text-decoration: none;
+  }
+}
+
+.indent-indicator {
+  color: #666;
+  margin-right: 5px;
+  font-weight: bold;
+}
+
+.group-indicator {
+  color: #856404;
+  font-size: 11px;
+  font-style: italic;
 }
 
 .results-info {

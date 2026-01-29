@@ -85,47 +85,62 @@
         </tr>
       </thead>
       <tbody>
-        <tr *ngFor="let order of orders" [class.copy-order]="order.isCopyOrder">
-          <td>
-            <span [title]="order.fixClOrdId || 'N/A'">
-              {{ order.fixClOrdId || 'N/A' }}
-            </span>
-            <span class="copy-badge" *ngIf="order.isCopyOrder">COPY</span>
-          </td>
-          <td>{{ order.fixOrderId || 'N/A' }}</td>
-          <td>
-            <span [title]="order.accountNumber || 'N/A'">
-              {{ order.accountNumber || 'N/A' }}
-            </span>
-            <span class="account-type" *ngIf="order.accountType">
-              ({{ order.accountType }})
-            </span>
-          </td>
-          <td>
-            <span class="order-type-badge" [class.primary]="!order.isCopyOrder" [class.shadow]="order.isCopyOrder">
-              {{ order.isCopyOrder ? 'Shadow' : 'Primary' }}
-            </span>
-          </td>
-          <td>{{ order.symbol || 'N/A' }}</td>
-          <td>{{ getSideLabel(order.side) }}</td>
-          <td>{{ getOrdTypeLabel(order.ordType) }}</td>
-          <td>{{ order.orderQty || 'N/A' }}</td>
-          <td>{{ order.price || 'N/A' }}</td>
-          <td>
-            <span class="status-badge" [class.filled]="order.ordStatus === '2'" [class.partial]="order.ordStatus === '1'">
-              {{ getOrdStatusLabel(order.ordStatus) }}
-            </span>
-          </td>
-          <td>{{ order.cumQty || 'N/A' }}</td>
-          <td>{{ order.avgPx || 'N/A' }}</td>
-          <td>{{ order.createdAt | date:'short' }}</td>
-          <td>
-            <button *ngIf="order.orderGroupId" (click)="viewOrderGroup(order)" class="btn-link">
-              View Group
-            </button>
-            <span *ngIf="!order.orderGroupId">-</span>
-          </td>
-        </tr>
+        <ng-container *ngFor="let order of getDisplayOrders()">
+          <tr 
+            [class.copy-order]="order.isCopyOrder" 
+            [class.group-member]="order.isGroupMember"
+            [class.primary-order]="!order.isCopyOrder && !order.isGroupMember"
+            [style.padding-left.px]="order.indentLevel ? order.indentLevel * 20 : 0">
+            <td>
+              <span *ngIf="order.indentLevel && order.indentLevel > 0" class="indent-indicator">└─</span>
+              <span [title]="order.fixClOrdId || 'N/A'">
+                {{ order.fixClOrdId || 'N/A' }}
+              </span>
+              <span class="copy-badge" *ngIf="order.isCopyOrder">COPY</span>
+            </td>
+            <td>{{ order.fixOrderId || 'N/A' }}</td>
+            <td>
+              <span [title]="order.accountNumber || 'N/A'">
+                {{ order.accountNumber || 'N/A' }}
+              </span>
+              <span class="account-type" *ngIf="order.accountType">
+                ({{ order.accountType }})
+              </span>
+            </td>
+            <td>
+              <span class="order-type-badge" [class.primary]="!order.isCopyOrder" [class.shadow]="order.isCopyOrder">
+                {{ order.isCopyOrder ? 'Shadow' : 'Primary' }}
+              </span>
+            </td>
+            <td>{{ order.symbol || 'N/A' }}</td>
+            <td>{{ getSideLabel(order.side) }}</td>
+            <td>{{ getOrdTypeLabel(order.ordType) }}</td>
+            <td>{{ order.orderQty || 'N/A' }}</td>
+            <td>{{ order.price || 'N/A' }}</td>
+            <td>
+              <span class="status-badge" [class.filled]="order.ordStatus === '2'" [class.partial]="order.ordStatus === '1'">
+                {{ getOrdStatusLabel(order.ordStatus) }}
+              </span>
+            </td>
+            <td>{{ order.cumQty || 'N/A' }}</td>
+            <td>{{ order.avgPx || 'N/A' }}</td>
+            <td>{{ order.createdAt | date:'short' }}</td>
+            <td>
+              <button 
+                *ngIf="order.orderGroupId && !order.isGroupMember" 
+                (click)="toggleOrderGroup(order)" 
+                class="btn-link"
+                [disabled]="isLoadingGroup(order)">
+                <span *ngIf="isLoadingGroup(order)">Loading...</span>
+                <span *ngIf="!isLoadingGroup(order)">
+                  {{ isGroupExpanded(order) ? 'Hide Group' : 'View Group' }}
+                </span>
+              </button>
+              <span *ngIf="!order.orderGroupId && !order.isGroupMember">-</span>
+              <span *ngIf="order.isGroupMember" class="group-indicator">Group Member</span>
+            </td>
+          </tr>
+        </ng-container>
       </tbody>
     </table>
     

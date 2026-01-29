@@ -15,6 +15,11 @@ export class OrdersComponent implements OnInit {
   loading: boolean = false;
   error: string | null = null;
   
+  // Track expanded order groups
+  expandedGroups: Set<string> = new Set();
+  groupOrders: Map<string, Order[]> = new Map();
+  loadingGroups: Set<string> = new Set();
+  
   // Search filters
   searchParams: OrderSearchParams = {
     page: 0,
@@ -116,19 +121,87 @@ export class OrdersComponent implements OnInit {
     this.searchOrders();
   }
 
-  viewOrderGroup(order: Order) {
-    if (order.orderGroupId) {
-      this.orderService.getOrdersByGroup(order.orderGroupId).subscribe({
-        next: (groupOrders) => {
-          console.log('Order Group:', groupOrders);
-          // You could show this in a modal or navigate to a detail page
-          alert(`Order Group contains ${groupOrders.length} order(s)`);
-        },
-        error: (err) => {
-          console.error('Error loading order group:', err);
-        }
-      });
+  toggleOrderGroup(order: Order) {
+    if (!order.orderGroupId) {
+      return;
     }
+    
+    const groupId = order.orderGroupId;
+    
+    if (this.expandedGroups.has(groupId)) {
+      // Collapse: remove from expanded set
+      this.expandedGroups.delete(groupId);
+    } else {
+      // Expand: add to expanded set and load group orders if not already loaded
+      this.expandedGroups.add(groupId);
+      
+      if (!this.groupOrders.has(groupId)) {
+        this.loadingGroups.add(groupId);
+        this.orderService.getOrdersByGroup(groupId).subscribe({
+          next: (groupOrders) => {
+            this.groupOrders.set(groupId, groupOrders);
+            this.loadingGroups.delete(groupId);
+            console.log(`Loaded ${groupOrders.length} order(s) for group ${groupId}`);
+          },
+          error: (err) => {
+            console.error('Error loading order group:', err);
+            this.loadingGroups.delete(groupId);
+            this.expandedGroups.delete(groupId);
+          }
+        });
+      }
+    }
+  }
+  
+  isGroupExpanded(order: Order): boolean {
+    return order.orderGroupId ? this.expandedGroups.has(order.orderGroupId) : false;
+  }
+  
+  getGroupOrders(order: Order): Order[] {
+    if (!order.orderGroupId) {
+      return [];
+    }
+    return this.groupOrders.get(order.orderGroupId) || [];
+  }
+  
+  isLoadingGroup(order: Order): boolean {
+    return order.orderGroupId ? this.loadingGroups.has(order.orderGroupId) : false;
+  }
+  
+  getDisplayOrders(): Array<Order & { isExpanded?: boolean; isGroupMember?: boolean; indentLevel?: number }> {
+    const displayOrders: Array<Order & { isExpanded?: boolean; isGroupMember?: boolean; indentLevel?: number }> = [];
+    const processedGroupIds = new Set<string>();
+    const processedOrderIds = new Set<string>();
+    
+    for (const order of this.orders) {
+      // Skip if already processed as a group member
+      if (processedOrderIds.has(order.id || '')) {
+        continue;
+      }
+      
+      // Check if this order is part of an expanded group that we've already processed
+      if (order.orderGroupId && processedGroupIds.has(order.orderGroupId)) {
+        continue;
+      }
+      
+      // Add the primary order
+      displayOrders.push({ ...order, isExpanded: this.isGroupExpanded(order), isGroupMember: false, indentLevel: 0 });
+      processedOrderIds.add(order.id || '');
+      
+      // If this order's group is expanded, add the group members (excluding orders already in the main list)
+      if (order.orderGroupId && this.expandedGroups.has(order.orderGroupId)) {
+        processedGroupIds.add(order.orderGroupId);
+        const groupOrders = this.getGroupOrders(order);
+        // Filter out orders that are already in the main search results
+        const shadowOrders = groupOrders.filter(o => !processedOrderIds.has(o.id || ''));
+        for (const shadowOrder of shadowOrders) {
+          displayOrders.push({ ...shadowOrder, isExpanded: false, isGroupMember: true, indentLevel: 1 });
+          processedOrderIds.add(shadowOrder.id || '');
+        }
+      }
+    }
+    
+    return displayOrders;
   }
 
   getSideLabel(side: string | undefined): string {
