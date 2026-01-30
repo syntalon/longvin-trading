@@ -35,14 +35,6 @@ public class LocateRequest {
     private UUID id;
 
     /**
-     * The order group this locate request is for.
-     * Locate is at the group level, not individual order level.
-     */
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "order_group_id", nullable = false)
-    private OrderGroup orderGroup;
-
-    /**
      * The primary order that triggered this locate request (for reference).
      */
     @ManyToOne(fetch = FetchType.LAZY)

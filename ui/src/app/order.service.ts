@@ -7,7 +7,7 @@ export interface Order {
   accountId?: number;
   accountNumber?: string;
   accountType?: 'PRIMARY' | 'SHADOW';
-  orderGroupId?: string;
+  primaryOrderClOrdId?: string;
   fixOrderId?: string;
   fixClOrdId?: string;
   fixOrigClOrdId?: string;
@@ -41,7 +41,6 @@ export interface OrderSearchParams {
   ordStatus?: string;
   execType?: string;
   isCopyOrder?: boolean;
-  orderGroupId?: string;
   startDate?: string;
   endDate?: string;
   page?: number;
@@ -83,9 +82,6 @@ export class OrderService {
     if (params.isCopyOrder !== undefined) {
       httpParams = httpParams.set('isCopyOrder', params.isCopyOrder.toString());
     }
-    if (params.orderGroupId) {
-      httpParams = httpParams.set('orderGroupId', params.orderGroupId);
-    }
     if (params.startDate) {
       httpParams = httpParams.set('startDate', params.startDate);
     }
@@ -106,8 +102,8 @@ export class OrderService {
     return this.http.get<Order>(`${this.apiUrl}/${id}`);
   }
 
-  getOrdersByGroup(orderGroupId: string): Observable<Order[]> {
-    return this.http.get<Order[]>(`${this.apiUrl}/group/${orderGroupId}`);
+  getOrdersByPrimaryClOrdId(primaryClOrdId: string): Observable<Order[]> {
+    return this.http.get<Order[]>(`${this.apiUrl}/by-primary/${primaryClOrdId}`);
   }
 
   getOrderEvents(orderId?: string, fixClOrdId?: string): Observable<OrderEvent[]> {

@@ -129,7 +129,7 @@
             <td>{{ formatDateTime(order.createdAt) }}</td>
             <td>
               <button 
-                *ngIf="order.orderGroupId && !order.isGroupMember" 
+                *ngIf="(order.primaryOrderClOrdId || order.fixClOrdId) && !order.isGroupMember" 
                 (click)="toggleOrderGroup(order)" 
                 class="btn-link"
                 [disabled]="isLoadingGroup(order)">
@@ -138,7 +138,7 @@
                   {{ isGroupExpanded(order) ? 'Hide Group' : 'View Group' }}
                 </span>
               </button>
-              <span *ngIf="!order.orderGroupId && !order.isGroupMember">-</span>
+              <span *ngIf="!order.primaryOrderClOrdId && !order.fixClOrdId && !order.isGroupMember">-</span>
               <span *ngIf="order.isGroupMember" class="group-indicator">Group Member</span>
             </td>
             <td>

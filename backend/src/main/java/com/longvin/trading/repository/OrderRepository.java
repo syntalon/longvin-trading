@@ -2,7 +2,6 @@ package com.longvin.trading.repository;
 
 import com.longvin.trading.entities.accounts.Account;
 import com.longvin.trading.entities.orders.Order;
-import com.longvin.trading.entities.orders.OrderGroup;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -58,14 +57,16 @@ public interface OrderRepository extends JpaRepository<Order, UUID> {
     List<Order> findByAccountIdOrderByCreatedAtDesc(Long accountId);
     
     /**
-     * Find all orders in an order group.
+     * Find all orders (primary + shadow) linked by primaryOrderClOrdId.
+     * Returns the primary order and all its shadow orders.
      */
-    List<Order> findByOrderGroupOrderByCreatedAtAsc(OrderGroup orderGroup);
+    @Query("SELECT o FROM Order o WHERE o.fixClOrdId = :primaryClOrdId OR o.primaryOrderClOrdId = :primaryClOrdId ORDER BY o.createdAt ASC")
+    List<Order> findByPrimaryOrderClOrdId(@Param("primaryClOrdId") String primaryClOrdId);
     
     /**
-     * Find all orders in an order group by ID.
+     * Find all shadow orders for a given primary order ClOrdID.
      */
-    List<Order> findByOrderGroupIdOrderByCreatedAtAsc(UUID orderGroupId);
+    List<Order> findByPrimaryOrderClOrdIdOrderByCreatedAtAsc(String primaryOrderClOrdId);
     
     /**
      * Find orders by symbol.

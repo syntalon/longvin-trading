@@ -182,9 +182,19 @@ public class ShortOrderPlacementService {
      * Generate ClOrdID for shadow order.
      */
     private String generateShadowClOrdId(Order draftOrder) {
-        String primaryOrderId = draftOrder.getOrderGroup() != null && draftOrder.getOrderGroup().getPrimaryOrder() != null
-            ? draftOrder.getOrderGroup().getPrimaryOrder().getFixOrderId()
-            : "UNKNOWN";
+        // Use primaryOrderClOrdId if available, otherwise use primary order's FixOrderId
+        String primaryOrderId = "UNKNOWN";
+        if (draftOrder.getPrimaryOrderClOrdId() != null) {
+            // Try to find the primary order by ClOrdID to get its FixOrderId
+            Optional<Order> primaryOrderOpt = orderRepository.findByFixClOrdId(draftOrder.getPrimaryOrderClOrdId());
+            if (primaryOrderOpt.isPresent()) {
+                primaryOrderId = primaryOrderOpt.get().getFixOrderId() != null 
+                    ? primaryOrderOpt.get().getFixOrderId() 
+                    : draftOrder.getPrimaryOrderClOrdId();
+            } else {
+                primaryOrderId = draftOrder.getPrimaryOrderClOrdId();
+            }
+        }
         
         String accountNumber = draftOrder.getAccount().getAccountNumber();
         String prefix = properties.getClOrdIdPrefix();

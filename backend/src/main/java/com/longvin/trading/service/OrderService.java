@@ -5,9 +5,7 @@ import com.longvin.trading.entities.accounts.Account;
 import com.longvin.trading.entities.accounts.AccountType;
 import com.longvin.trading.entities.orders.Order;
 import com.longvin.trading.entities.orders.OrderEvent;
-import com.longvin.trading.entities.orders.OrderGroup;
 import com.longvin.trading.repository.OrderEventRepository;
-import com.longvin.trading.repository.OrderGroupRepository;
 import com.longvin.trading.repository.OrderRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,6 +16,7 @@ import quickfix.SessionID;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.Executor;
 
 /**
@@ -30,18 +29,15 @@ public class OrderService {
     private static final Logger log = LoggerFactory.getLogger(OrderService.class);
 
     private final OrderRepository orderRepository;
-    private final OrderGroupRepository orderGroupRepository;
     private final OrderEventRepository orderEventRepository;
     private final AccountCacheService accountCacheService;
     private final Executor orderMirroringExecutor;
 
     public OrderService(OrderRepository orderRepository, 
-                       OrderGroupRepository orderGroupRepository,
                        OrderEventRepository orderEventRepository,
                        AccountCacheService accountCacheService,
                        @Qualifier("orderMirroringExecutor") Executor orderMirroringExecutor) {
         this.orderRepository = orderRepository;
-        this.orderGroupRepository = orderGroupRepository;
         this.orderEventRepository = orderEventRepository;
         this.accountCacheService = accountCacheService;
         this.orderMirroringExecutor = orderMirroringExecutor;
@@ -90,29 +86,16 @@ public class OrderService {
             log.debug("Order already exists, updating: ClOrdID={}, OrderID={}", 
                     context.getClOrdID(), context.getOrderID());
             
-            // Ensure order has a group (one-to-one mapping: one primary order = one group)
-            if (order.getOrderGroup() == null) {
-                OrderGroup orderGroup = findOrCreateOrderGroup(order, account);
-                orderGroup.addOrder(order);
-                log.info("Linked existing order to OrderGroup: ClOrdID={}, OrderGroupId={}", 
-                        order.getFixClOrdId(), orderGroup.getId());
-            }
         } else {
             // Create new order
             order = buildOrderFromContext(context);
             order.setAccount(account);
             
-            // Create OrderGroup for this primary order (one-to-one mapping)
-            OrderGroup orderGroup = findOrCreateOrderGroup(order, account);
-            
-            // Link order to group (this sets order.orderGroup and adds order to group.orders)
-            orderGroup.addOrder(order);
-            
-            // Save order (this will persist the relationship)
+            // Save order
             order = orderRepository.save(order);
-            log.info("Created new order: ClOrdID={}, OrderID={}, Account={}, Symbol={}, OrderGroupId={}", 
+            log.info("Created new order: ClOrdID={}, OrderID={}, Account={}, Symbol={}", 
                     order.getFixClOrdId(), order.getFixOrderId(), 
-                    order.getAccount().getAccountNumber(), order.getSymbol(), orderGroup.getId());
+                    order.getAccount().getAccountNumber(), order.getSymbol());
             
             // Link order to any existing events that were created before the order (event-driven)
             linkOrderToEvents(order);
@@ -299,58 +282,11 @@ public class OrderService {
         return unlinkedEvents.size();
     }
 
-    /**
-     * Find or create OrderGroup for a primary order.
-     * Each primary order gets its own unique OrderGroup (one-to-one mapping).
-     * All shadow orders copied from this primary order will be added to this group.
-     */
-    private OrderGroup findOrCreateOrderGroup(Order order, Account account) {
-        // First, check if this order already has a group assigned
-        if (order.getOrderGroup() != null) {
-            log.debug("Order already has OrderGroup: OrderGroupId={}, PrimaryOrderClOrdID={}", 
-                    order.getOrderGroup().getId(), order.getFixClOrdId());
-            return order.getOrderGroup();
-        }
-        
-        // If order has an ID, check if a group exists for this primary order
-        if (order.getId() != null) {
-            Optional<OrderGroup> existingGroupByOrder = orderGroupRepository.findByPrimaryOrderId(order.getId());
-            if (existingGroupByOrder.isPresent()) {
-                OrderGroup group = existingGroupByOrder.get();
-                log.debug("Found existing OrderGroup for primary order: OrderGroupId={}, PrimaryOrderClOrdID={}", 
-                        group.getId(), order.getFixClOrdId());
-                return group;
-            }
-        }
-        
-        // Use strategyKey from account if available, otherwise generate one
-        // This is for informational purposes only, not for grouping
-        String strategyKey = account.getStrategyKey();
-        if (strategyKey == null || strategyKey.isBlank()) {
-            // Generate default strategy key based on account number and order ClOrdID
-            strategyKey = account.getAccountNumber() + "_" + order.getFixClOrdId();
-        }
-        
-        // Create new OrderGroup - one per primary order (one-to-one mapping)
-        OrderGroup group = OrderGroup.builder()
-                .strategyKey(strategyKey)
-                .primaryOrder(order)
-                .symbol(order.getSymbol())
-                .totalTargetQty(order.getOrderQty())
-                .state(OrderGroup.GroupState.ACTIVE) // Primary order is active
-                .build();
-        
-        group = orderGroupRepository.save(group);
-        
-        log.info("Created new OrderGroup for primary order: OrderGroupId={}, PrimaryOrderClOrdID={}, StrategyKey={}", 
-                group.getId(), order.getFixClOrdId(), strategyKey);
-        
-        return group;
-    }
 
     /**
-     * Create a shadow account order and link it to the primary order's OrderGroup.
+     * Create a shadow account order and link it to the primary order by ClOrdID.
      * This is used when copying orders to shadow accounts.
+     * Simply sets the primaryOrderClOrdId to link the shadow order to its primary order.
      * 
      * @param primaryOrderClOrdId The ClOrdID of the primary order
      * @param shadowAccount The shadow account
@@ -363,7 +299,7 @@ public class OrderService {
      * @param stopPx Stop price (nullable)
      * @param timeInForce Time in force
      * @param exDestination Route/destination
-     * @return Created Order entity, or null if primary order not found
+     * @return Created Order entity, or null if shadow order already exists
      */
     @Transactional
     public Order createShadowAccountOrder(String primaryOrderClOrdId, Account shadowAccount,
@@ -371,22 +307,6 @@ public class OrderService {
                                           Character ordType, java.math.BigDecimal orderQty,
                                           java.math.BigDecimal price, java.math.BigDecimal stopPx,
                                           Character timeInForce, String exDestination) {
-        // Find primary order to get its OrderGroup
-        // Handle potential duplicates by getting the first one (most recent)
-        Order primaryOrder = findPrimaryOrderByClOrdId(primaryOrderClOrdId);
-        if (primaryOrder == null) {
-            log.warn("Primary order not found for ClOrdID={}, cannot create shadow order. ShadowClOrdID={}", 
-                    primaryOrderClOrdId, shadowClOrdId);
-            return null;
-        }
-        OrderGroup orderGroup = primaryOrder.getOrderGroup();
-        
-        if (orderGroup == null) {
-            log.warn("Primary order has no OrderGroup, cannot link shadow order. PrimaryClOrdID={}, ShadowClOrdID={}", 
-                    primaryOrderClOrdId, shadowClOrdId);
-            return null;
-        }
-        
         // Check if shadow order already exists
         Optional<Order> existingShadowOrderOpt = orderRepository.findByFixClOrdId(shadowClOrdId);
         if (existingShadowOrderOpt.isPresent()) {
@@ -394,12 +314,13 @@ public class OrderService {
             return existingShadowOrderOpt.get();
         }
         
-        // Create shadow order
+        // Create shadow order with primaryOrderClOrdId set to link to primary order
+        // No need to check if primary order exists - we just store the ClOrdID reference
         Order shadowOrder = Order.builder()
                 .fixClOrdId(shadowClOrdId)
                 .fixOrderId(null) // Will be set when ExecutionReport is received
                 .account(shadowAccount)
-                .orderGroup(orderGroup)
+                .primaryOrderClOrdId(primaryOrderClOrdId) // Link to primary order by ClOrdID
                 .symbol(symbol)
                 .side(side)
                 .ordType(ordType)
@@ -412,14 +333,11 @@ public class OrderService {
                 .ordStatus('0') // NEW
                 .build();
         
-        // Link to OrderGroup
-        orderGroup.addOrder(shadowOrder);
-        
         // Save shadow order
         shadowOrder = orderRepository.save(shadowOrder);
         
-        log.info("Created shadow account order: ShadowClOrdID={}, ShadowAccount={}, PrimaryClOrdID={}, OrderGroupId={}", 
-                shadowClOrdId, shadowAccount.getAccountNumber(), primaryOrderClOrdId, orderGroup.getId());
+        log.info("Created shadow account order: ShadowClOrdID={}, ShadowAccount={}, PrimaryClOrdID={}", 
+                shadowClOrdId, shadowAccount.getAccountNumber(), primaryOrderClOrdId);
         
         return shadowOrder;
     }
@@ -481,34 +399,17 @@ public class OrderService {
                 return null;
             }
             
-            // Find primary order to get its OrderGroup (handle duplicates)
-            Order primaryOrder = findPrimaryOrderByClOrdId(primaryClOrdId);
-            if (primaryOrder == null) {
-                log.warn("Primary order not found for shadow order: PrimaryClOrdID={}, ShadowClOrdID={}", 
-                        primaryClOrdId, context.getClOrdID());
-                return null;
-            }
-            OrderGroup orderGroup = primaryOrder.getOrderGroup();
-            
-            if (orderGroup == null) {
-                log.warn("Primary order has no OrderGroup, cannot link shadow order. PrimaryClOrdID={}, ShadowClOrdID={}", 
-                        primaryClOrdId, context.getClOrdID());
-                return null;
-            }
-            
-            // Create shadow order
+            // Create shadow order with primaryOrderClOrdId set to link to primary order
+            // No need to check if primary order exists - we just store the ClOrdID reference
             order = buildOrderFromContext(context);
             order.setAccount(shadowAccount);
-            order.setOrderGroup(orderGroup);
-            
-            // Link to OrderGroup
-            orderGroup.addOrder(order);
+            order.setPrimaryOrderClOrdId(primaryClOrdId); // Link to primary order by ClOrdID
             
             // Save shadow order
             order = orderRepository.save(order);
-            log.info("Created copy order from fill ExecutionReport: ClOrdID={}, OrderID={}, Account={}, Symbol={}, OrderGroupId={}", 
+            log.info("Created copy order from fill ExecutionReport: ClOrdID={}, OrderID={}, Account={}, Symbol={}, PrimaryClOrdID={}", 
                     order.getFixClOrdId(), order.getFixOrderId(), 
-                    order.getAccount().getAccountNumber(), order.getSymbol(), orderGroup.getId());
+                    order.getAccount().getAccountNumber(), order.getSymbol(), primaryClOrdId);
         }
         
         // Update order fields from context
@@ -637,13 +538,6 @@ public class OrderService {
             log.debug("Primary order exists, updating: ClOrdID={}, OrderID={}", 
                     context.getClOrdID(), context.getOrderID());
             
-            // Ensure order has a group (one-to-one mapping: one primary order = one group)
-            if (order.getOrderGroup() == null) {
-                OrderGroup orderGroup = findOrCreateOrderGroup(order, account);
-                orderGroup.addOrder(order);
-                log.info("Linked existing primary order to OrderGroup: ClOrdID={}, OrderGroupId={}", 
-                        order.getFixClOrdId(), orderGroup.getId());
-            }
         } else {
             // Order doesn't exist yet (race condition) - create it
             log.info("Primary order not found in database, creating it (race condition). ClOrdID={}, OrderID={}, ExecType={}, OrdStatus={}", 
@@ -652,15 +546,11 @@ public class OrderService {
             order = buildOrderFromContext(context);
             order.setAccount(account);
             
-            // Create OrderGroup for this primary order (one-to-one mapping)
-            OrderGroup orderGroup = findOrCreateOrderGroup(order, account);
-            orderGroup.addOrder(order);
-            
             // Save order
             order = orderRepository.save(order);
-            log.info("Created primary order from fill ExecutionReport: ClOrdID={}, OrderID={}, Account={}, Symbol={}, OrderGroupId={}", 
+            log.info("Created primary order from fill ExecutionReport: ClOrdID={}, OrderID={}, Account={}, Symbol={}", 
                     order.getFixClOrdId(), order.getFixOrderId(), 
-                    order.getAccount().getAccountNumber(), order.getSymbol(), orderGroup.getId());
+                    order.getAccount().getAccountNumber(), order.getSymbol());
         }
         
         // Update order fields from context
@@ -773,6 +663,7 @@ public class OrderService {
     /**
      * Create shadow account order with "Staged" event (transactional).
      * This is the actual implementation called by the async method.
+     * Simply sets the primaryOrderClOrdId to link the shadow order to its primary order.
      */
     @Transactional
     private void createShadowOrderWithStagedEvent(String primaryOrderClOrdId, Account shadowAccount,
@@ -780,21 +671,6 @@ public class OrderService {
                                                   Character ordType, java.math.BigDecimal orderQty,
                                                   java.math.BigDecimal price, java.math.BigDecimal stopPx,
                                                   Character timeInForce, String exDestination, SessionID sessionID) {
-        // Find primary order to get its OrderGroup
-        Order primaryOrder = findPrimaryOrderByClOrdId(primaryOrderClOrdId);
-        if (primaryOrder == null) {
-            log.warn("Primary order not found for ClOrdID={}, cannot create shadow order. ShadowClOrdID={}", 
-                    primaryOrderClOrdId, shadowClOrdId);
-            return;
-        }
-        OrderGroup orderGroup = primaryOrder.getOrderGroup();
-        
-        if (orderGroup == null) {
-            log.warn("Primary order has no OrderGroup, cannot link shadow order. PrimaryClOrdID={}, ShadowClOrdID={}", 
-                    primaryOrderClOrdId, shadowClOrdId);
-            return;
-        }
-        
         // Check if shadow order already exists
         Optional<Order> existingShadowOrderOpt = orderRepository.findByFixClOrdId(shadowClOrdId);
         if (existingShadowOrderOpt.isPresent()) {
@@ -802,12 +678,14 @@ public class OrderService {
             return;
         }
         
-        // Create shadow order
+        // Create shadow order with primaryOrderClOrdId set to link to primary order
+        // No need to check if primary order exists - we just store the ClOrdID reference
+        // This allows shadow orders to be created even if primary order/OrderGroup don't exist yet
         Order shadowOrder = Order.builder()
                 .fixClOrdId(shadowClOrdId)
                 .fixOrderId(null) // Will be set when ExecutionReport is received
                 .account(shadowAccount)
-                .orderGroup(orderGroup)
+                .primaryOrderClOrdId(primaryOrderClOrdId) // Link to primary order by ClOrdID
                 .symbol(symbol)
                 .side(side)
                 .ordType(ordType)
@@ -820,10 +698,7 @@ public class OrderService {
                 .ordStatus('0') // NEW
                 .build();
         
-        // Link to OrderGroup
-        orderGroup.addOrder(shadowOrder);
-        
-        // Save shadow order
+        // Save shadow order (no OrderGroup dependency - uses primaryOrderClOrdId instead)
         shadowOrder = orderRepository.save(shadowOrder);
         
         // Link order to any existing events that were created before the order (event-driven)
@@ -856,8 +731,8 @@ public class OrderService {
         shadowOrder.addEvent(stagedEvent);
         orderRepository.save(shadowOrder);
         
-        log.info("Created shadow account order with Staged event: ShadowClOrdID={}, ShadowAccount={}, PrimaryClOrdID={}, OrderGroupId={}", 
-                shadowClOrdId, shadowAccount.getAccountNumber(), primaryOrderClOrdId, orderGroup.getId());
+        log.info("Created shadow account order with Staged event: ShadowClOrdID={}, ShadowAccount={}, PrimaryClOrdID={}", 
+                shadowClOrdId, shadowAccount.getAccountNumber(), primaryOrderClOrdId);
     }
 
     /**

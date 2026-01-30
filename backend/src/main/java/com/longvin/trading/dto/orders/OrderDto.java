@@ -22,7 +22,7 @@ public class OrderDto {
     private Long accountId;
     private String accountNumber;
     private AccountType accountType;
-    private UUID orderGroupId;
+    private String primaryOrderClOrdId;
     private String fixOrderId;
     private String fixClOrdId;
     private String fixOrigClOrdId;

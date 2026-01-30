@@ -2,10 +2,7 @@ package com.longvin.trading.service;
 
 import com.longvin.trading.config.FixClientProperties;
 import com.longvin.trading.entities.accounts.Account;
-import com.longvin.trading.entities.accounts.AccountType;
 import com.longvin.trading.entities.orders.Order;
-import com.longvin.trading.entities.orders.OrderGroup;
-import com.longvin.trading.repository.OrderGroupRepository;
 import com.longvin.trading.repository.OrderRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,16 +24,13 @@ public class ShortOrderDraftService {
     private static final Logger log = LoggerFactory.getLogger(ShortOrderDraftService.class);
 
     private final OrderRepository orderRepository;
-    private final OrderGroupRepository orderGroupRepository;
     private final AccountCacheService accountCacheService;
     private final FixClientProperties properties;
 
     public ShortOrderDraftService(OrderRepository orderRepository,
-                                  OrderGroupRepository orderGroupRepository,
                                   AccountCacheService accountCacheService,
                                   FixClientProperties properties) {
         this.orderRepository = orderRepository;
-        this.orderGroupRepository = orderGroupRepository;
         this.accountCacheService = accountCacheService;
         this.properties = properties;
     }
@@ -60,15 +54,12 @@ public class ShortOrderDraftService {
             return new ArrayList<>();
         }
 
-        // Get or create OrderGroup
-        OrderGroup orderGroup = getOrCreateOrderGroup(primaryOrder);
-
         List<Order> draftOrders = new ArrayList<>();
 
         // Create draft order for each shadow account
         for (Account shadowAccount : shadowAccounts) {
             try {
-                Order draftOrder = createDraftOrder(primaryOrder, shadowAccount, orderGroup);
+                Order draftOrder = createDraftOrder(primaryOrder, shadowAccount);
                 draftOrders.add(draftOrder);
                 log.info("Created draft order for shadow account {}: OrderID={}, Symbol={}, Qty={}",
                     shadowAccount.getAccountNumber(), draftOrder.getId(), draftOrder.getSymbol(), draftOrder.getOrderQty());
@@ -84,45 +75,12 @@ public class ShortOrderDraftService {
     }
 
     /**
-     * Get or create OrderGroup for the primary order.
-     */
-    private OrderGroup getOrCreateOrderGroup(Order primaryOrder) {
-        // Check if order already has a group
-        if (primaryOrder.getOrderGroup() != null) {
-            return primaryOrder.getOrderGroup();
-        }
-
-        // Try to find existing group by strategy key
-        String strategyKey = generateStrategyKey(primaryOrder);
-        Optional<OrderGroup> existingGroup = orderGroupRepository.findByStrategyKey(strategyKey);
-        if (existingGroup.isPresent()) {
-            OrderGroup group = existingGroup.get();
-            primaryOrder.setOrderGroup(group);
-            orderRepository.save(primaryOrder);
-            return group;
-        }
-
-        // Create new OrderGroup
-        OrderGroup group = OrderGroup.builder()
-            .strategyKey(strategyKey)
-            .primaryOrder(primaryOrder)
-            .build();
-        group = orderGroupRepository.save(group);
-
-        // Link primary order to group
-        primaryOrder.setOrderGroup(group);
-        orderRepository.save(primaryOrder);
-
-        return group;
-    }
-
-    /**
      * Create a draft order for a shadow account based on the primary order.
      */
-    private Order createDraftOrder(Order primaryOrder, Account shadowAccount, OrderGroup orderGroup) {
+    private Order createDraftOrder(Order primaryOrder, Account shadowAccount) {
         Order draftOrder = Order.builder()
             .account(shadowAccount)
-            .orderGroup(orderGroup)
+            .primaryOrderClOrdId(primaryOrder.getFixClOrdId()) // Link to primary order by ClOrdID
             .symbol(primaryOrder.getSymbol())
             .side(primaryOrder.getSide())
             .ordType(primaryOrder.getOrdType())
@@ -144,35 +102,20 @@ public class ShortOrderDraftService {
 
         draftOrder = orderRepository.save(draftOrder);
 
-        // Add to order group
-        orderGroup.addOrder(draftOrder);
-        orderGroupRepository.save(orderGroup);
-
         return draftOrder;
     }
 
     /**
-     * Generate a strategy key for grouping orders.
-     */
-    private String generateStrategyKey(Order order) {
-        // Use symbol + side + timestamp to create a unique strategy key
-        return String.format("%s-%s-%d", 
-            order.getSymbol(), 
-            order.getSide() != null ? order.getSide() : "UNKNOWN",
-            System.currentTimeMillis() / 1000); // Use seconds for grouping
-    }
-
-    /**
      * Get draft orders for a primary order (orders that haven't been sent yet).
-     * Draft orders are identified by having null fixClOrdId.
+     * Draft orders are identified by having null fixClOrdId and matching primaryOrderClOrdId.
      */
     @Transactional(readOnly = true)
     public List<Order> getDraftOrdersForPrimaryOrder(Order primaryOrder) {
-        if (primaryOrder.getOrderGroup() == null) {
+        if (primaryOrder.getFixClOrdId() == null) {
             return new ArrayList<>();
         }
 
-        return orderRepository.findByOrderGroupIdOrderByCreatedAtAsc(primaryOrder.getOrderGroup().getId())
+        return orderRepository.findByPrimaryOrderClOrdIdOrderByCreatedAtAsc(primaryOrder.getFixClOrdId())
             .stream()
             .filter(order -> 
                 !order.getId().equals(primaryOrder.getId()) && // Exclude primary order
@@ -187,4 +130,3 @@ public class ShortOrderDraftService {
         return order.getFixClOrdId() == null || order.getFixClOrdId().isEmpty();
     }
 }
-

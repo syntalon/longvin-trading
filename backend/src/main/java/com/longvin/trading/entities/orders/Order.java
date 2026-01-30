@@ -13,12 +13,11 @@ import java.util.UUID;
 /**
  * Order entity representing the current state of an order.
  * This is derived from OrderEvent records and updated as new events arrive.
- * Each order can be part of an OrderGroup (primary + shadow orders).
+ * Shadow orders are linked to primary orders via primaryOrderClOrdId.
  */
 @Entity
 @Table(name = "orders", indexes = {
     @Index(name = "idx_order_account_id", columnList = "account_id"),
-    @Index(name = "idx_order_order_group_id", columnList = "order_group_id"),
     @Index(name = "idx_order_fix_order_id", columnList = "fix_order_id"),
     @Index(name = "idx_order_fix_cl_ord_id", columnList = "fix_cl_ord_id"),
     @Index(name = "idx_order_created_at", columnList = "created_at"),
@@ -46,11 +45,11 @@ public class Order {
     private Account account;
 
     /**
-     * The order group this order belongs to (links primary + shadow orders).
+     * ClOrdID of the primary order (for shadow orders).
+     * This allows shadow orders to reference their primary order without requiring OrderGroup.
      */
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "order_group_id")
-    private OrderGroup orderGroup;
+    @Column(name = "primary_order_cl_ord_id", length = 100)
+    private String primaryOrderClOrdId;
 
     /**
      * FIX OrderID from the broker/exchange (stored as data, not primary key).

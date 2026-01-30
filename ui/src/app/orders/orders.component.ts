@@ -128,31 +128,32 @@ export class OrdersComponent implements OnInit {
   }
 
   toggleOrderGroup(order: Order) {
-    if (!order.orderGroupId) {
+    if (!order.primaryOrderClOrdId && !order.fixClOrdId) {
       return;
     }
     
-    const groupId = order.orderGroupId;
+    // Use primaryOrderClOrdId if available (for shadow orders), otherwise use fixClOrdId (for primary orders)
+    const primaryClOrdId = order.primaryOrderClOrdId || order.fixClOrdId || '';
     
-    if (this.expandedGroups.has(groupId)) {
+    if (this.expandedGroups.has(primaryClOrdId)) {
       // Collapse: remove from expanded set
-      this.expandedGroups.delete(groupId);
+      this.expandedGroups.delete(primaryClOrdId);
     } else {
       // Expand: add to expanded set and load group orders if not already loaded
-      this.expandedGroups.add(groupId);
+      this.expandedGroups.add(primaryClOrdId);
       
-      if (!this.groupOrders.has(groupId)) {
-        this.loadingGroups.add(groupId);
-        this.orderService.getOrdersByGroup(groupId).subscribe({
+      if (!this.groupOrders.has(primaryClOrdId)) {
+        this.loadingGroups.add(primaryClOrdId);
+        this.orderService.getOrdersByPrimaryClOrdId(primaryClOrdId).subscribe({
           next: (groupOrders) => {
-            this.groupOrders.set(groupId, groupOrders);
-            this.loadingGroups.delete(groupId);
-            console.log(`Loaded ${groupOrders.length} order(s) for group ${groupId}`);
+            this.groupOrders.set(primaryClOrdId, groupOrders);
+            this.loadingGroups.delete(primaryClOrdId);
+            console.log(`Loaded ${groupOrders.length} order(s) for primary order ${primaryClOrdId}`);
           },
           error: (err) => {
             console.error('Error loading order group:', err);
-            this.loadingGroups.delete(groupId);
-            this.expandedGroups.delete(groupId);
+            this.loadingGroups.delete(primaryClOrdId);
+            this.expandedGroups.delete(primaryClOrdId);
           }
         });
       }
@@ -160,18 +161,21 @@ export class OrdersComponent implements OnInit {
   }
   
   isGroupExpanded(order: Order): boolean {
-    return order.orderGroupId ? this.expandedGroups.has(order.orderGroupId) : false;
+    const primaryClOrdId = order.primaryOrderClOrdId || order.fixClOrdId || '';
+    return primaryClOrdId ? this.expandedGroups.has(primaryClOrdId) : false;
   }
   
   getGroupOrders(order: Order): Order[] {
-    if (!order.orderGroupId) {
+    const primaryClOrdId = order.primaryOrderClOrdId || order.fixClOrdId || '';
+    if (!primaryClOrdId) {
       return [];
     }
-    return this.groupOrders.get(order.orderGroupId) || [];
+    return this.groupOrders.get(primaryClOrdId) || [];
   }
   
   isLoadingGroup(order: Order): boolean {
-    return order.orderGroupId ? this.loadingGroups.has(order.orderGroupId) : false;
+    const primaryClOrdId = order.primaryOrderClOrdId || order.fixClOrdId || '';
+    return primaryClOrdId ? this.loadingGroups.has(primaryClOrdId) : false;
   }
   
   getDisplayOrders(): Array<Order & { isExpanded?: boolean; isGroupMember?: boolean; indentLevel?: number }> {
@@ -185,8 +189,11 @@ export class OrdersComponent implements OnInit {
         continue;
       }
       
+      // Determine the primary ClOrdID for grouping (use fixClOrdId for primary orders, primaryOrderClOrdId for shadow orders)
+      const primaryClOrdId = order.primaryOrderClOrdId || order.fixClOrdId || '';
+      
       // Check if this order is part of an expanded group that we've already processed
-      if (order.orderGroupId && processedGroupIds.has(order.orderGroupId)) {
+      if (primaryClOrdId && processedGroupIds.has(primaryClOrdId)) {
         continue;
       }
       
@@ -195,8 +202,8 @@ export class OrdersComponent implements OnInit {
       processedOrderIds.add(order.id || '');
       
       // If this order's group is expanded, add the group members (excluding orders already in the main list)
-      if (order.orderGroupId && this.expandedGroups.has(order.orderGroupId)) {
-        processedGroupIds.add(order.orderGroupId);
+      if (primaryClOrdId && this.expandedGroups.has(primaryClOrdId)) {
+        processedGroupIds.add(primaryClOrdId);
         const groupOrders = this.getGroupOrders(order);
         // Filter out orders that are already in the main search results
         const shadowOrders = groupOrders.filter(o => !processedOrderIds.has(o.id || ''));

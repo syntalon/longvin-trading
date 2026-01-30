@@ -57,7 +57,6 @@ public class OrderController {
             @RequestParam(required = false) Character ordStatus,
             @RequestParam(required = false) Character execType,
             @RequestParam(required = false) Boolean isCopyOrder,
-            @RequestParam(required = false) UUID orderGroupId,
             @RequestParam(required = false) String startDate,
             @RequestParam(required = false) String endDate,
             @RequestParam(defaultValue = "0") int page,
@@ -118,14 +117,6 @@ public class OrderController {
                 ordersPage = orderRepository.findByOrdStatus(ordStatus, pageable);
             } else if (execType != null) {
                 ordersPage = orderRepository.findByExecType(execType, pageable);
-            } else if (orderGroupId != null) {
-                List<Order> orders = orderRepository.findByOrderGroupIdOrderByCreatedAtAsc(orderGroupId);
-                ordersPage = Page.empty();
-                // Convert to DTOs
-                List<OrderDto> dtos = orders.stream()
-                        .map(this::toDto)
-                        .collect(Collectors.toList());
-                return ResponseEntity.ok(dtos);
             } else {
                 // Default: get recent orders
                 LocalDateTime start = startDate != null ? LocalDateTime.parse(startDate) : LocalDateTime.now().minusDays(7);
@@ -163,11 +154,12 @@ public class OrderController {
     }
 
     /**
-     * Get orders in an order group (primary + shadow orders).
+     * Get all orders (primary + shadows) by primary order ClOrdID.
+     * Returns the primary order and all its shadow orders.
      */
-    @GetMapping("/group/{orderGroupId}")
-    public ResponseEntity<List<OrderDto>> getOrdersByGroup(@PathVariable UUID orderGroupId) {
-        List<Order> orders = orderRepository.findByOrderGroupIdOrderByCreatedAtAsc(orderGroupId);
+    @GetMapping("/by-primary/{primaryClOrdId}")
+    public ResponseEntity<List<OrderDto>> getOrdersByPrimaryClOrdId(@PathVariable String primaryClOrdId) {
+        List<Order> orders = orderRepository.findByPrimaryOrderClOrdId(primaryClOrdId);
         List<OrderDto> dtos = orders.stream()
                 .map(this::toDto)
                 .collect(Collectors.toList());
@@ -266,7 +258,7 @@ public class OrderController {
                 .accountId(account != null ? account.getId() : null)
                 .accountNumber(account != null ? account.getAccountNumber() : null)
                 .accountType(account != null ? account.getAccountType() : null)
-                .orderGroupId(order.getOrderGroup() != null ? order.getOrderGroup().getId() : null)
+                .primaryOrderClOrdId(order.getPrimaryOrderClOrdId())
                 .fixOrderId(order.getFixOrderId())
                 .fixClOrdId(order.getFixClOrdId())
                 .fixOrigClOrdId(order.getFixOrigClOrdId())
