@@ -121,6 +121,13 @@ public class LocateResponseHandler implements ExecutionReportHandler {
 
         String locateClOrdId = "COPY-" + shadowAccount + "-" + primaryClOrdId;
         
+        // Check if shadow order already exists to avoid duplicates
+        if (orderService.orderExists(locateClOrdId)) {
+            log.info("Shadow locate order already exists, skipping duplicate. ShadowClOrdID={}, PrimaryClOrdID={}, QuoteReqID={}",
+                    locateClOrdId, primaryClOrdId, quoteReqID);
+            return;
+        }
+        
         // Find shadow account
         Optional<Account> shadowAccountOpt = accountCacheService.findByAccountNumber(shadowAccount);
         if (shadowAccountOpt.isEmpty()) {

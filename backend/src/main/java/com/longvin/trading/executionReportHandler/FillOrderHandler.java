@@ -126,10 +126,19 @@ public class FillOrderHandler implements ExecutionReportHandler {
         } else if (accountType == AccountType.PRIMARY) {
             // This is a primary/main account order from DAS Trader - create event and run copy trades to shadow accounts
             try {
-                // Create event for primary order (filled/partially filled)
-                orderService.createEventForOrder(context, sessionID);
+                // For locate orders, they may not receive a "New" ExecutionReport (ExecType=0, OrdStatus=0)
+                // Type 1 routes go directly to OrdStatus='B' (offer), Type 0 routes may skip "New" status
+                // So we need to create the order here if it doesn't exist
+                if (isLocateOrder(context)) {
+                    // Create or update the primary locate order and create event
+                    orderService.createOrUpdateOrderForPrimaryAccount(context, sessionID);
+                } else {
+                    // For regular orders, they should already exist from NewOrderHandler
+                    // Just create event (filled/partially filled)
+                    orderService.createEventForOrder(context, sessionID);
+                }
             } catch (Exception e) {
-                log.error("Error creating event for primary order: ClOrdID={}, Account={}, Error={}", 
+                log.error("Error creating/updating order or event for primary order: ClOrdID={}, Account={}, Error={}", 
                         context.getClOrdID(), context.getAccount(), e.getMessage(), e);
             }
             // Run copy trades to shadow accounts

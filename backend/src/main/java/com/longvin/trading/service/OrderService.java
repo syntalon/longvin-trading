@@ -163,6 +163,7 @@ public class OrderService {
     /**
      * Create OrderEvent from ExecutionReportContext.
      * Order can be null for event-driven architecture.
+     * For shadow account orders, we only create events and don't update the order.
      */
     private OrderEvent createOrderEvent(Order order, ExecutionReportContext context, SessionID sessionID) {
         OrderEvent event = OrderEvent.builder()
@@ -195,15 +196,19 @@ public class OrderService {
         // Save event directly (event-driven: events can exist independently of orders)
         event = orderEventRepository.save(event);
         
-        // If order exists, link the event to it
-        if (order != null) {
+        // For shadow account orders, we don't update the order - only create events
+        // The order was already created when the message was sent, and we don't want to modify it
+        // Events are linked via ClOrdID, so they can be queried together without updating the order
+        // Only link event to order if it's a primary account order (for backward compatibility)
+        if (order != null && order.getAccount() != null && order.getAccount().getAccountType() == AccountType.PRIMARY) {
             order.addEvent(event);
             orderRepository.save(order);
         }
         
-        log.debug("Created order event: ClOrdID={}, ExecType={}, OrdStatus={}, OrderId={}", 
+        log.debug("Created order event: ClOrdID={}, ExecType={}, OrdStatus={}, OrderId={}, IsShadowAccount={}", 
                 context.getClOrdID(), context.getExecType(), context.getOrdStatus(), 
-                order != null ? order.getId() : "null");
+                order != null ? order.getId() : "null",
+                order != null && order.getAccount() != null && order.getAccount().getAccountType() == AccountType.SHADOW);
         
         return event;
     }
