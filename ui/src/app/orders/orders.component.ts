@@ -217,10 +217,14 @@ export class OrdersComponent implements OnInit {
     return displayOrders;
   }
 
-  getSideLabel(side: string | undefined): string {
+  getSideLabel(side: string | undefined, order?: Order): string {
     if (!side) return 'N/A';
+    
+    // Check if this is a locate order using the backend's isLocateOrder field
+    const isLocate = order?.isLocateOrder === true;
+    
     const sideMap: { [key: string]: string } = {
-      '1': 'Buy',
+      '1': isLocate ? 'Buy (Locate)' : 'Buy',
       '2': 'Sell',
       '3': 'Sell Short',
       '4': 'Sell Short Exempt',

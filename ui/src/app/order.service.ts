@@ -29,6 +29,7 @@ export interface Order {
   createdAt?: string;
   updatedAt?: string;
   isCopyOrder?: boolean;
+  isLocateOrder?: boolean;
   eventCount?: number;
 }
 

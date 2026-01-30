@@ -8,6 +8,7 @@ import com.longvin.trading.entities.orders.OrderEvent;
 import com.longvin.trading.repository.AccountRepository;
 import com.longvin.trading.repository.OrderEventRepository;
 import com.longvin.trading.repository.OrderRepository;
+import com.longvin.trading.service.RouteService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -35,13 +36,16 @@ public class OrderController {
     private final OrderRepository orderRepository;
     private final AccountRepository accountRepository;
     private final OrderEventRepository orderEventRepository;
+    private final RouteService routeService;
 
     public OrderController(OrderRepository orderRepository, 
                           AccountRepository accountRepository,
-                          OrderEventRepository orderEventRepository) {
+                          OrderEventRepository orderEventRepository,
+                          RouteService routeService) {
         this.orderRepository = orderRepository;
         this.accountRepository = accountRepository;
         this.orderEventRepository = orderEventRepository;
+        this.routeService = routeService;
     }
 
     /**
@@ -280,8 +284,39 @@ public class OrderController {
                 .createdAt(order.getCreatedAt())
                 .updatedAt(order.getUpdatedAt())
                 .isCopyOrder(order.getFixClOrdId() != null && order.getFixClOrdId().startsWith("COPY-"))
+                .isLocateOrder(isLocateOrder(order))
                 .eventCount(order.getEvents() != null ? order.getEvents().size() : 0)
                 .build();
+    }
+    
+    /**
+     * Check if an order is a locate order.
+     * A locate order is identified by:
+     * - Side=BUY (1)
+     * - ExDestination is a locate route (has routeType set in routes table)
+     * - OR ClOrdID starts with "LOC-" (fallback)
+     */
+    private boolean isLocateOrder(Order order) {
+        // Check if Side is BUY
+        if (order.getSide() == null || order.getSide() != '1') { // '1' = BUY
+            return false;
+        }
+        
+        // Check if ExDestination is a locate route
+        String exDestination = order.getExDestination();
+        if (exDestination != null && !exDestination.isBlank()) {
+            if (routeService.isLocateRoute(exDestination)) {
+                return true;
+            }
+        }
+        
+        // Fallback: Check ClOrdID prefix (for backward compatibility)
+        String clOrdId = order.getFixClOrdId();
+        if (clOrdId != null && clOrdId.startsWith("LOC-")) {
+            return true;
+        }
+        
+        return false;
     }
 }
 

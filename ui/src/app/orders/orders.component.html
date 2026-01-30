@@ -115,7 +115,7 @@
               </span>
             </td>
             <td>{{ order.symbol || 'N/A' }}</td>
-            <td>{{ getSideLabel(order.side) }}</td>
+            <td>{{ getSideLabel(order.side, order) }}</td>
             <td>{{ getOrdTypeLabel(order.ordType) }}</td>
             <td>{{ order.orderQty || 'N/A' }}</td>
             <td>{{ order.price || 'N/A' }}</td>

@@ -632,9 +632,10 @@ public class OrderService {
     }
 
     /**
-     * Asynchronously create shadow account order with "Staged" event.
+     * Asynchronously create shadow account order.
      * This is called after sending the FIX message, non-blocking.
-     * Creates the order with ExecType='0', OrdStatus='0' and a "Staged" event.
+     * Creates the order with ExecType='0', OrdStatus='0'.
+     * Events will be created when ExecutionReports are received.
      * 
      * @param primaryOrderClOrdId The ClOrdID of the primary order
      * @param shadowAccount The shadow account
@@ -656,26 +657,27 @@ public class OrderService {
                                                       Character timeInForce, String exDestination, SessionID sessionID) {
         orderMirroringExecutor.execute(() -> {
             try {
-                createShadowOrderWithStagedEvent(primaryOrderClOrdId, shadowAccount, shadowClOrdId, symbol, side,
+                createShadowOrder(primaryOrderClOrdId, shadowAccount, shadowClOrdId, symbol, side,
                         ordType, orderQty, price, stopPx, timeInForce, exDestination, sessionID);
             } catch (Exception e) {
-                log.error("Error creating shadow order with Staged event asynchronously: ShadowClOrdID={}, Error={}", 
+                log.error("Error creating shadow order asynchronously: ShadowClOrdID={}, Error={}", 
                         shadowClOrdId, e.getMessage(), e);
             }
         });
     }
 
     /**
-     * Create shadow account order with "Staged" event (transactional).
+     * Create shadow account order (transactional).
      * This is the actual implementation called by the async method.
      * Simply sets the primaryOrderClOrdId to link the shadow order to its primary order.
+     * Events will be created when ExecutionReports are received.
      */
     @Transactional
-    private void createShadowOrderWithStagedEvent(String primaryOrderClOrdId, Account shadowAccount,
-                                                  String shadowClOrdId, String symbol, Character side,
-                                                  Character ordType, java.math.BigDecimal orderQty,
-                                                  java.math.BigDecimal price, java.math.BigDecimal stopPx,
-                                                  Character timeInForce, String exDestination, SessionID sessionID) {
+    private void createShadowOrder(String primaryOrderClOrdId, Account shadowAccount,
+                                  String shadowClOrdId, String symbol, Character side,
+                                  Character ordType, java.math.BigDecimal orderQty,
+                                  java.math.BigDecimal price, java.math.BigDecimal stopPx,
+                                  Character timeInForce, String exDestination, SessionID sessionID) {
         // Check if shadow order already exists
         Optional<Order> existingShadowOrderOpt = orderRepository.findByFixClOrdId(shadowClOrdId);
         if (existingShadowOrderOpt.isPresent()) {
@@ -685,7 +687,7 @@ public class OrderService {
         
         // Create shadow order with primaryOrderClOrdId set to link to primary order
         // No need to check if primary order exists - we just store the ClOrdID reference
-        // This allows shadow orders to be created even if primary order/OrderGroup don't exist yet
+        // This allows shadow orders to be created even if primary order doesn't exist yet
         Order shadowOrder = Order.builder()
                 .fixClOrdId(shadowClOrdId)
                 .fixOrderId(null) // Will be set when ExecutionReport is received
@@ -703,40 +705,13 @@ public class OrderService {
                 .ordStatus('0') // NEW
                 .build();
         
-        // Save shadow order (no OrderGroup dependency - uses primaryOrderClOrdId instead)
+        // Save shadow order
         shadowOrder = orderRepository.save(shadowOrder);
         
         // Link order to any existing events that were created before the order (event-driven)
         linkOrderToEvents(shadowOrder);
         
-        // Create "Staged" event (ExecType='0', OrdStatus='0', text="Staged")
-        OrderEvent stagedEvent = OrderEvent.builder()
-                .order(shadowOrder) // Link to order since it exists now
-                .fixExecId(shadowClOrdId + "-STAGED-" + System.currentTimeMillis())
-                .execType('0') // NEW
-                .ordStatus('0') // NEW
-                .fixOrderId(null)
-                .fixClOrdId(shadowClOrdId)
-                .symbol(symbol)
-                .side(side)
-                .ordType(ordType)
-                .timeInForce(timeInForce)
-                .orderQty(orderQty)
-                .price(price)
-                .stopPx(stopPx)
-                .account(shadowAccount.getAccountNumber())
-                .text("Staged")
-                .sessionId(sessionID != null ? sessionID.toString() : null)
-                .build();
-        
-        // Save event directly (event-driven: events can exist independently)
-        stagedEvent = orderEventRepository.save(stagedEvent);
-        
-        // Link event to order
-        shadowOrder.addEvent(stagedEvent);
-        orderRepository.save(shadowOrder);
-        
-        log.info("Created shadow account order with Staged event: ShadowClOrdID={}, ShadowAccount={}, PrimaryClOrdID={}", 
+        log.info("Created shadow account order: ShadowClOrdID={}, ShadowAccount={}, PrimaryClOrdID={}", 
                 shadowClOrdId, shadowAccount.getAccountNumber(), primaryOrderClOrdId);
     }
 

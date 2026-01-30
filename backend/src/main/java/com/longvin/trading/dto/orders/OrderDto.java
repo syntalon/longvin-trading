@@ -46,6 +46,7 @@ public class OrderDto {
     
     // Helper fields
     private Boolean isCopyOrder; // true if ClOrdID starts with "COPY-"
+    private Boolean isLocateOrder; // true if this is a locate order (BUY with locate route)
     private Integer eventCount; // Number of OrderEvents for this order
 }
 
