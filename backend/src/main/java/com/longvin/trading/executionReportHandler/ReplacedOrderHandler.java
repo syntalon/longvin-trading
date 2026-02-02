@@ -162,29 +162,20 @@ public class ReplacedOrderHandler implements ExecutionReportHandler {
         
         // Determine original and new shadow ClOrdIDs
         // Shadow order ClOrdID pattern: COPY-{shadowAccount}-{primaryClOrdID}
-        // We don't need to update the shadow order entity's ClOrdID - it stays as COPY-{account}-{primaryClOrdID}
-        // We only need different ClOrdIDs in the replace request to satisfy FIX protocol
+        // We use the same ClOrdID for both OrigClOrdID and ClOrdID in the replace request
+        // The shadow order entity's ClOrdID stays as COPY-{account}-{primaryClOrdID}
         
         // Original shadow ClOrdID: Use origClOrdID if available, otherwise use current ClOrdID
         String originalPrimaryClOrdId = (context.getOrigClOrdID() != null && !context.getOrigClOrdID().equals("N/A")) 
                 ? context.getOrigClOrdID() 
                 : context.getClOrdID();
-        String originalShadowClOrdId = "COPY-" + shadowAccountNumber + "-" + originalPrimaryClOrdId;
+        String shadowClOrdId = "COPY-" + shadowAccountNumber + "-" + originalPrimaryClOrdId;
         
-        // New shadow ClOrdID: COPY-{shadowAccount}-{newPrimaryClOrdID}
-        String newShadowClOrdId = "COPY-" + shadowAccountNumber + "-" + context.getClOrdID();
-        
-        // FIX protocol requires ClOrdID != OrigClOrdID in replace request
-        // If both are the same (primary ClOrdID didn't change), use a temporary unique ClOrdID for the request
-        // The shadow order entity keeps its ClOrdID pattern - we don't update it
-        if (originalShadowClOrdId.equals(newShadowClOrdId)) {
-            // Primary ClOrdID didn't change, but FIX requires different ClOrdIDs for replace
-            // Generate a temporary unique ClOrdID just for this replace request
-            long timestamp = System.currentTimeMillis();
-            newShadowClOrdId = originalShadowClOrdId + "-R" + timestamp;
-            log.info("Primary ClOrdID unchanged, using temporary ClOrdID for replace request: {} -> {}",
-                    originalShadowClOrdId, newShadowClOrdId);
-        }
+        // Use the same ClOrdID for both OrigClOrdID and ClOrdID in the replace request
+        // This is simpler and avoids generating temporary ClOrdIDs
+        // If the broker requires different ClOrdIDs, it will reject and we can handle that
+        String origClOrdIdForRequest = shadowClOrdId;
+        String clOrdIdForRequest = shadowClOrdId;
         
         // Calculate new quantity based on copy rule
         BigDecimal primaryQty = context.getOrderQty();
@@ -198,8 +189,8 @@ public class ReplacedOrderHandler implements ExecutionReportHandler {
         
         // Build order parameters from ExecutionReport context
         Map<String, Object> orderParams = new HashMap<>();
-        orderParams.put("origClOrdID", originalShadowClOrdId); // Original shadow ClOrdID
-        orderParams.put("clOrdID", newShadowClOrdId); // New shadow ClOrdID
+        orderParams.put("origClOrdID", origClOrdIdForRequest); // Original shadow ClOrdID
+        orderParams.put("clOrdID", clOrdIdForRequest); // Same ClOrdID for replace request
         orderParams.put("side", context.getSide());
         orderParams.put("symbol", context.getSymbol());
         orderParams.put("orderQty", copyQty.intValue());
@@ -222,7 +213,7 @@ public class ReplacedOrderHandler implements ExecutionReportHandler {
                 orderParams.put("price", context.getPrice().doubleValue());
             } else {
                 log.warn("Limit order (OrdType={}) has no price in ExecutionReport. ClOrdID={}, ShadowClOrdID={}",
-                        ordType, context.getClOrdID(), newShadowClOrdId);
+                        ordType, context.getClOrdID(), shadowClOrdId);
             }
         }
         
@@ -236,17 +227,17 @@ public class ReplacedOrderHandler implements ExecutionReportHandler {
             orderParams.put("exDestination", targetRoute);
         }
         
-        log.info("Sending replace order to shadow account: OrigShadowClOrdID={}, NewShadowClOrdID={}, " +
+        log.info("Sending replace order to shadow account: ShadowClOrdID={}, " +
                 "PrimaryClOrdID={}, ShadowAccount={}, ShadowAccountId={}, " +
                 "PrimaryQty={}, CopyQty={}, OriginalRoute={}, TargetRoute={}, RuleId={}",
-                originalShadowClOrdId, newShadowClOrdId, context.getClOrdID(),
+                shadowClOrdId, context.getClOrdID(),
                 shadowAccountNumber, shadowAccount.getId(), primaryQty, copyQty, originalRoute, targetRoute, rule.getId());
         
         // Send replace order
         fixMessageSender.sendOrderCancelReplaceRequest(initiatorSessionID, orderParams);
         
-        log.info("Replace order sent to shadow account: NewShadowClOrdID={}, ShadowAccount={}, ShadowAccountId={}",
-                newShadowClOrdId, shadowAccountNumber, shadowAccount.getId());
+        log.info("Replace order sent to shadow account: ShadowClOrdID={}, ShadowAccount={}, ShadowAccountId={}",
+                shadowClOrdId, shadowAccountNumber, shadowAccount.getId());
     }
 }
 

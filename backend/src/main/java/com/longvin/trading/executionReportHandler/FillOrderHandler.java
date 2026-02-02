@@ -118,7 +118,7 @@ public class FillOrderHandler implements ExecutionReportHandler {
                     context.getClOrdID(), context.getAccount(), accountId, context.getExecType(), 
                     context.getOrdStatus(), orderType, context.getExDestination());
             try {
-                orderService.createEventForOrder(context, sessionID);
+                orderService.createEventForShadowOrder(context, sessionID);
             } catch (Exception e) {
                 log.error("Error creating event for copy order: ClOrdID={}, Account={}, Error={}", 
                         context.getClOrdID(), context.getAccount(), e.getMessage(), e);
