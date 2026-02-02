@@ -3,11 +3,11 @@ package com.longvin.trading.executionReportHandler;
 import com.longvin.trading.dto.messages.ExecutionReportContext;
 import com.longvin.trading.entities.accounts.Account;
 import com.longvin.trading.entities.accounts.AccountType;
-import com.longvin.trading.entities.orders.Order;
+import com.longvin.trading.entities.copy.CopyRule;
 import com.longvin.trading.fix.FixSessionRegistry;
 import com.longvin.trading.fixSender.FixMessageSender;
-import com.longvin.trading.repository.OrderRepository;
 import com.longvin.trading.service.AccountCacheService;
+import com.longvin.trading.service.CopyRuleService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -18,6 +18,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Handler for replaced order ExecutionReports (ExecType=5, OrdStatus=5).
@@ -33,16 +34,16 @@ public class ReplacedOrderHandler implements ExecutionReportHandler {
     private final AccountCacheService accountCacheService;
     private final FixSessionRegistry fixSessionRegistry;
     private final FixMessageSender fixMessageSender;
-    private final OrderRepository orderRepository;
+    private final CopyRuleService copyRuleService;
     
     public ReplacedOrderHandler(AccountCacheService accountCacheService,
                                 FixSessionRegistry fixSessionRegistry,
                                 FixMessageSender fixMessageSender,
-                                OrderRepository orderRepository) {
+                                CopyRuleService copyRuleService) {
         this.accountCacheService = accountCacheService;
         this.fixSessionRegistry = fixSessionRegistry;
         this.fixMessageSender = fixMessageSender;
-        this.orderRepository = orderRepository;
+        this.copyRuleService = copyRuleService;
     }
 
     @Override
@@ -80,29 +81,25 @@ public class ReplacedOrderHandler implements ExecutionReportHandler {
             return;
         }
         
-        // Find all shadow orders linked to the original primary order
-        if (origClOrdID == null || origClOrdID.equals("N/A")) {
-            log.warn("OrigClOrdID is missing, cannot find shadow orders to replace. ClOrdID={}", 
-                    context.getClOrdID());
+        Account primaryAccount = accountOpt.get();
+        
+        // Get shadow accounts that match copy rules (same as NewOrderHandler)
+        Character ordType = context.getOrdType() != null ? context.getOrdType() : '1'; // Default to MARKET
+        String symbol = context.getSymbol();
+        BigDecimal quantity = context.getOrderQty();
+        
+        List<Account> shadowAccounts = copyRuleService.getShadowAccountsForCopy(
+                primaryAccount, ordType, symbol, quantity);
+        
+        log.info("Found {} shadow account(s) for replace order via copy rules: PrimaryAccount={}, PrimaryAccountId={}, OrdType={}, Symbol={}, Qty={}, ShadowAccounts={}",
+                shadowAccounts.size(), primaryAccount.getAccountNumber(), primaryAccount.getId(), ordType, symbol, quantity,
+                shadowAccounts.stream().map(Account::getAccountNumber).collect(Collectors.toList()));
+        
+        if (shadowAccounts.isEmpty()) {
+            log.warn("No shadow accounts found matching copy rules, cannot copy replace order. ClOrdID={}, AccountId: {}, OrdType={}, Symbol={}, Qty={}",
+                    context.getClOrdID(), primaryAccount.getId(), ordType, symbol, quantity);
             return;
         }
-        
-        List<Order> shadowOrders = orderRepository.findByPrimaryOrderClOrdId(origClOrdID);
-        
-        // Filter to only shadow orders (those with primaryOrderClOrdId set)
-        List<Order> shadowOrdersOnly = shadowOrders.stream()
-                .filter(order -> order.getPrimaryOrderClOrdId() != null && 
-                        order.getPrimaryOrderClOrdId().equals(origClOrdID))
-                .toList();
-        
-        if (shadowOrdersOnly.isEmpty()) {
-            log.debug("No shadow orders found for primary order replacement. OrigClOrdID={}, NewClOrdID={}",
-                    origClOrdID, context.getClOrdID());
-            return;
-        }
-        
-        log.info("Found {} shadow order(s) to replace for primary order. OrigClOrdID={}, NewClOrdID={}",
-                shadowOrdersOnly.size(), origClOrdID, context.getClOrdID());
         
         // Get initiator session for sending orders
         Optional<SessionID> initiatorSessionOpt = fixSessionRegistry.findAnyLoggedOnInitiator();
@@ -114,13 +111,23 @@ public class ReplacedOrderHandler implements ExecutionReportHandler {
         SessionID initiatorSessionID = initiatorSessionOpt.get();
         
         // Send replace order to each shadow account
-        for (Order shadowOrder : shadowOrdersOnly) {
+        for (Account shadowAccount : shadowAccounts) {
             try {
-                sendReplaceOrderToShadowAccount(context, shadowOrder, initiatorSessionID);
+                // Get copy rule for this account pair
+                Optional<CopyRule> ruleOpt = copyRuleService.getRuleForAccountPair(
+                        primaryAccount, shadowAccount, ordType, symbol, quantity);
+                
+                if (ruleOpt.isPresent()) {
+                    CopyRule rule = ruleOpt.get();
+                    sendReplaceOrderToShadowAccount(context, primaryAccount, shadowAccount, rule, initiatorSessionID);
+                } else {
+                    // No copy rule found - skip replication
+                    log.error("No copy rule found for account pair, cannot copy replace order. PrimaryAccount={}, ShadowAccount={}",
+                            primaryAccount.getAccountNumber(), shadowAccount.getAccountNumber());
+                }
             } catch (Exception e) {
                 log.error("Error sending replace order to shadow account {} (AccountId: {}): {}", 
-                        shadowOrder.getAccount().getAccountNumber(), shadowOrder.getAccount().getId(), 
-                        e.getMessage(), e);
+                        shadowAccount.getAccountNumber(), shadowAccount.getId(), e.getMessage(), e);
             }
         }
     }
@@ -128,22 +135,30 @@ public class ReplacedOrderHandler implements ExecutionReportHandler {
     /**
      * Send replace order to a shadow account.
      */
-    private void sendReplaceOrderToShadowAccount(ExecutionReportContext context, Order shadowOrder, 
-                                                 SessionID initiatorSessionID) {
-        String shadowAccountNumber = shadowOrder.getAccount().getAccountNumber();
-        String originalShadowClOrdId = shadowOrder.getFixClOrdId();
+    private void sendReplaceOrderToShadowAccount(ExecutionReportContext context, Account primaryAccount,
+                                                 Account shadowAccount, CopyRule rule, SessionID initiatorSessionID) {
+        String shadowAccountNumber = shadowAccount.getAccountNumber();
         
-        // Generate new ClOrdID for shadow order: COPY-{shadowAccount}-{newPrimaryClOrdID}
+        // Determine original primary ClOrdID - use origClOrdID if available, otherwise use current ClOrdID
+        String originalPrimaryClOrdId = (context.getOrigClOrdID() != null && !context.getOrigClOrdID().equals("N/A")) 
+                ? context.getOrigClOrdID() 
+                : context.getClOrdID();
+        
+        // Original shadow ClOrdID: COPY-{shadowAccount}-{originalPrimaryClOrdID}
+        String originalShadowClOrdId = "COPY-" + shadowAccountNumber + "-" + originalPrimaryClOrdId;
+        
+        // New shadow ClOrdID: COPY-{shadowAccount}-{newPrimaryClOrdID}
         String newShadowClOrdId = "COPY-" + shadowAccountNumber + "-" + context.getClOrdID();
         
-        // Calculate new quantity (use the same ratio if needed, or just use the new quantity from context)
-        // For now, use the new quantity from context directly
-        BigDecimal newQty = context.getOrderQty();
-        if (newQty == null) {
-            log.warn("OrderQty is missing in ExecutionReport, using original quantity. ClOrdID={}", 
-                    context.getClOrdID());
-            newQty = shadowOrder.getOrderQty();
-        }
+        // Calculate new quantity based on copy rule
+        BigDecimal primaryQty = context.getOrderQty();
+        BigDecimal copyQty = copyRuleService.calculateCopyQuantity(rule, primaryQty);
+        
+        // Get original route from context
+        String originalRoute = context.getExDestination();
+        
+        // Get target route from copy rule
+        String targetRoute = copyRuleService.getTargetRoute(rule, originalRoute, false);
         
         // Build order parameters from ExecutionReport context
         Map<String, Object> orderParams = new HashMap<>();
@@ -151,7 +166,7 @@ public class ReplacedOrderHandler implements ExecutionReportHandler {
         orderParams.put("clOrdID", newShadowClOrdId); // New shadow ClOrdID
         orderParams.put("side", context.getSide());
         orderParams.put("symbol", context.getSymbol());
-        orderParams.put("orderQty", newQty.intValue());
+        orderParams.put("orderQty", copyQty.intValue());
         orderParams.put("account", shadowAccountNumber);
         
         // Set order type from context
@@ -180,21 +195,22 @@ public class ReplacedOrderHandler implements ExecutionReportHandler {
             orderParams.put("stopPx", context.getStopPx().doubleValue());
         }
         
-        // Set route if available
-        if (shadowOrder.getExDestination() != null && !shadowOrder.getExDestination().isBlank()) {
-            orderParams.put("exDestination", shadowOrder.getExDestination());
+        // Set route from copy rule
+        if (targetRoute != null && !targetRoute.isBlank()) {
+            orderParams.put("exDestination", targetRoute);
         }
         
         log.info("Sending replace order to shadow account: OrigShadowClOrdID={}, NewShadowClOrdID={}, " +
-                "PrimaryOrigClOrdID={}, PrimaryNewClOrdID={}, ShadowAccount={}, ShadowAccountId={}, Qty={}",
-                originalShadowClOrdId, newShadowClOrdId, context.getOrigClOrdID(), context.getClOrdID(),
-                shadowAccountNumber, shadowOrder.getAccount().getId(), newQty);
+                "PrimaryOrigClOrdID={}, PrimaryNewClOrdID={}, ShadowAccount={}, ShadowAccountId={}, " +
+                "PrimaryQty={}, CopyQty={}, OriginalRoute={}, TargetRoute={}, RuleId={}",
+                originalShadowClOrdId, newShadowClOrdId, originalPrimaryClOrdId, context.getClOrdID(),
+                shadowAccountNumber, shadowAccount.getId(), primaryQty, copyQty, originalRoute, targetRoute, rule.getId());
         
         // Send replace order
         fixMessageSender.sendOrderCancelReplaceRequest(initiatorSessionID, orderParams);
         
         log.info("Replace order sent to shadow account: NewShadowClOrdID={}, ShadowAccount={}, ShadowAccountId={}",
-                newShadowClOrdId, shadowAccountNumber, shadowOrder.getAccount().getId());
+                newShadowClOrdId, shadowAccountNumber, shadowAccount.getId());
     }
 }
 
