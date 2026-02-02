@@ -293,8 +293,11 @@ public class OrderController {
      * Check if an order is a locate order.
      * A locate order is identified by:
      * - Side=BUY (1)
-     * - ExDestination is a locate route (has routeType set in routes table)
-     * - OR ClOrdID starts with "LOC-" (fallback)
+     * - AND ClOrdID starts with "LOC-" (primary locate orders)
+     * - OR ClOrdID starts with "COPY-" AND ExDestination is a locate route (shadow locate orders)
+     * 
+     * Note: We don't rely solely on ExDestination being a locate route because regular BUY orders
+     * might also use routes that have routeType set, which would incorrectly mark them as locate orders.
      */
     private boolean isLocateOrder(Order order) {
         // Check if Side is BUY
@@ -302,18 +305,24 @@ public class OrderController {
             return false;
         }
         
-        // Check if ExDestination is a locate route
-        String exDestination = order.getExDestination();
-        if (exDestination != null && !exDestination.isBlank()) {
-            if (routeService.isLocateRoute(exDestination)) {
-                return true;
-            }
+        String clOrdId = order.getFixClOrdId();
+        if (clOrdId == null) {
+            return false;
         }
         
-        // Fallback: Check ClOrdID prefix (for backward compatibility)
-        String clOrdId = order.getFixClOrdId();
-        if (clOrdId != null && clOrdId.startsWith("LOC-")) {
+        // Primary locate orders: ClOrdID starts with "LOC-"
+        if (clOrdId.startsWith("LOC-")) {
             return true;
+        }
+        
+        // Shadow locate orders: ClOrdID starts with "COPY-" AND ExDestination is a locate route
+        if (clOrdId.startsWith("COPY-")) {
+            String exDestination = order.getExDestination();
+            if (exDestination != null && !exDestination.isBlank()) {
+                if (routeService.isLocateRoute(exDestination)) {
+                    return true;
+                }
+            }
         }
         
         return false;
