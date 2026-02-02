@@ -233,7 +233,33 @@ public class OrderService {
         // Use ClOrdID for linking (not OrderID) because ClOrdID is always present
         Order order = null;
         if (context.getClOrdID() != null) {
+            // First try to find order by exact ClOrdID
             order = findOrderByClOrdId(context.getClOrdID());
+            
+            // If not found and ClOrdID has a temporary replace suffix (-R{timestamp}),
+            // try to find the order by stripping the suffix or using OrigClOrdID
+            if (order == null && context.getClOrdID().contains("-R")) {
+                // Try using OrigClOrdID if available (should be the original ClOrdID)
+                if (context.getOrigClOrdID() != null && !context.getOrigClOrdID().equals("N/A")) {
+                    order = findOrderByClOrdId(context.getOrigClOrdID());
+                    if (order != null) {
+                        log.debug("Found order using OrigClOrdID for temporary ClOrdID: ClOrdID={}, OrigClOrdID={}, OrderId={}",
+                                context.getClOrdID(), context.getOrigClOrdID(), order.getId());
+                    }
+                }
+                
+                // If still not found, try stripping the -R{timestamp} suffix
+                if (order == null) {
+                    String baseClOrdId = stripReplaceSuffix(context.getClOrdID());
+                    if (!baseClOrdId.equals(context.getClOrdID())) {
+                        order = findOrderByClOrdId(baseClOrdId);
+                        if (order != null) {
+                            log.debug("Found order by stripping replace suffix: ClOrdID={}, BaseClOrdID={}, OrderId={}",
+                                    context.getClOrdID(), baseClOrdId, order.getId());
+                        }
+                    }
+                }
+            }
         }
         
         // Create event (order can be null)
@@ -244,6 +270,26 @@ public class OrderService {
                 order != null);
         
         return event;
+    }
+    
+    /**
+     * Strip the replace suffix (-R{timestamp}) from a ClOrdID to get the base ClOrdID.
+     * Example: COPY-TRDAS83-8139-R1770056636573 -> COPY-TRDAS83-8139
+     */
+    private String stripReplaceSuffix(String clOrdId) {
+        if (clOrdId == null) {
+            return null;
+        }
+        // Pattern: -R followed by digits (timestamp)
+        int replaceIndex = clOrdId.lastIndexOf("-R");
+        if (replaceIndex > 0) {
+            // Check if what follows is all digits (timestamp)
+            String suffix = clOrdId.substring(replaceIndex + 2);
+            if (suffix.matches("\\d+")) {
+                return clOrdId.substring(0, replaceIndex);
+            }
+        }
+        return clOrdId;
     }
     
     /**
@@ -260,14 +306,20 @@ public class OrderService {
             return 0;
         }
         
+        String baseClOrdId = order.getFixClOrdId();
+        
         // Find all events for this ClOrdID that don't have an order linked yet
-        List<OrderEvent> unlinkedEvents = orderEventRepository.findByFixClOrdIdOrderByEventTimeAsc(order.getFixClOrdId())
+        // This includes:
+        // 1. Events with exact ClOrdID match
+        // 2. Events where OrigClOrdID matches (for replace events with temporary ClOrdIDs)
+        List<OrderEvent> unlinkedEvents = orderEventRepository
+                .findByClOrdIdOrOrigClOrdIdOrderByEventTimeAsc(baseClOrdId)
                 .stream()
                 .filter(event -> event.getOrder() == null)
-                .toList();
+                .collect(java.util.stream.Collectors.toList());
         
         if (unlinkedEvents.isEmpty()) {
-            log.debug("No unlinked events found for ClOrdID={}, OrderId={}", order.getFixClOrdId(), order.getId());
+            log.debug("No unlinked events found for ClOrdID={}, OrderId={}", baseClOrdId, order.getId());
             return 0;
         }
         
@@ -282,7 +334,7 @@ public class OrderService {
         orderRepository.save(order);
         
         log.info("Linked {} events to order: ClOrdID={}, OrderId={}", 
-                unlinkedEvents.size(), order.getFixClOrdId(), order.getId());
+                unlinkedEvents.size(), baseClOrdId, order.getId());
         
         return unlinkedEvents.size();
     }
