@@ -157,65 +157,6 @@ public class FillOrderHandler implements ExecutionReportHandler {
     }
 
     /**
-     * Handle short order replication when order is filled.
-     * Directly replicates short orders to shadow accounts (stock should already be borrowed).
-     */
-    private void handleShortOrderReplication(ExecutionReportContext context, Account primaryAccount) {
-        log.info("Processing short sell order replication on fill: ClOrdID={}, Account: {}, AccountId: {}, Symbol={}, Qty={}",
-                context.getClOrdID(), context.getAccount(), primaryAccount.getId(), context.getSymbol(), context.getOrderQty());
-
-        // Get initiator session for sending orders
-        Optional<SessionID> initiatorSessionOpt = fixSessionRegistry.findAnyLoggedOnInitiator();
-        if (initiatorSessionOpt.isEmpty()) {
-            log.warn("No logged-on initiator session found, cannot replicate short order to shadow accounts. ClOrdID={}, AccountId: {}",
-                    context.getClOrdID(), primaryAccount.getId());
-            return;
-        }
-        SessionID initiatorSessionID = initiatorSessionOpt.get();
-
-        // Get shadow accounts that match copy rules
-        Character ordType = context.getOrdType() != null ? context.getOrdType() : '1'; // Default to MARKET
-        String symbol = context.getSymbol();
-        BigDecimal quantity = context.getOrderQty();
-        
-        List<Account> shadowAccounts = copyRuleService.getShadowAccountsForCopy(
-                primaryAccount, ordType, symbol, quantity);
-        
-        log.info("Found {} shadow account(s) for short order replication via copy rules: PrimaryAccount={}, PrimaryAccountId={}, OrdType={}, Symbol={}, Qty={}, ShadowAccounts={}",
-                shadowAccounts.size(), primaryAccount.getAccountNumber(), primaryAccount.getId(), ordType, symbol, quantity,
-                shadowAccounts.stream().map(Account::getAccountNumber).collect(Collectors.toList()));
-        
-        if (shadowAccounts.isEmpty()) {
-            log.warn("No shadow accounts found matching copy rules, cannot replicate short order. ClOrdID={}, AccountId: {}, OrdType={}, Symbol={}, Qty={}",
-                    context.getClOrdID(), primaryAccount.getId(), ordType, symbol, quantity);
-            return;
-        }
-
-        // Send orders to each shadow account using copy rules
-        for (Account shadowAccount : shadowAccounts) {
-            try {
-                // Get copy rule for this account pair
-                Optional<CopyRule> ruleOpt = copyRuleService.getRuleForAccountPair(
-                        primaryAccount, shadowAccount, ordType, symbol, quantity);
-                
-                if (ruleOpt.isPresent()) {
-                    CopyRule rule = ruleOpt.get();
-                    sendOrderToShadowAccountWithRule(context, primaryAccount, shadowAccount, rule, initiatorSessionID);
-                } else {
-                    // No copy rule found - skip replication
-                    log.error("No copy rule found for account pair, cannot replicate order. PrimaryAccount={}, ShadowAccount={}",
-                            primaryAccount.getAccountNumber(), shadowAccount.getAccountNumber());
-                }
-            } catch (Exception e) {
-                log.error("Error replicating short order to shadow account {} (AccountId: {}): {}", 
-                        shadowAccount.getAccountNumber(), shadowAccount.getId(), e.getMessage(), e);
-            }
-        }
-    }
-
-
-
-    /**
      * Check if this is a locate order (Short Locate New Order).
      * A locate order is identified by:
      * - Side=BUY (1)
@@ -441,6 +382,21 @@ public class FillOrderHandler implements ExecutionReportHandler {
             timeInForce = '0'; // Default to DAY
         }
         orderParams.put("timeInForce", timeInForce);
+        
+        // Set price if it's a limit order (from ExecutionReport tag 44)
+        if (ordType == '2') { // LIMIT
+            if (context.getPrice() != null) {
+                orderParams.put("price", context.getPrice().doubleValue());
+            } else {
+                log.warn("Limit locate order (OrdType={}) has no price in ExecutionReport. ClOrdID={}, LocateClOrdID={}",
+                        ordType, context.getClOrdID(), clOrdId);
+            }
+        }
+        
+        // Set stop price if it's a stop order (from ExecutionReport tag 99)
+        if ((ordType == '3' || ordType == '4') && context.getStopPx() != null) {
+            orderParams.put("stopPx", context.getStopPx().doubleValue());
+        }
 
         log.info("Sending locate-only order with rule: ClOrdID={}, PrimaryAccountId={}, ShadowAccount={}, ShadowAccountId={}, " +
                 "PrimaryQty={}, CopyQty={}, OriginalRoute={}, LocateRoute={}, RuleId={}",
@@ -471,163 +427,6 @@ public class FillOrderHandler implements ExecutionReportHandler {
                 clOrdId, primaryAccount.getId(), shadowAccountNumber, shadowAccount.getId(), copyQty, locateRoute);
     }
 
-    /**
-     * Handle regular order (buy/sell, not short) replication when order is filled.
-     * Sends orders to shadow accounts.
-     */
-    private void handleRegularOrderReplication(ExecutionReportContext context, Account primaryAccount) {
-        log.info("Processing regular order replication on fill: ClOrdID={}, Account: {}, AccountId: {}, Symbol={}, Side={}, Qty={}",
-                context.getClOrdID(), context.getAccount(), primaryAccount.getId(), context.getSymbol(), 
-                context.getSide(), context.getOrderQty());
-
-        // Get initiator session for sending orders
-        Optional<SessionID> initiatorSessionOpt = fixSessionRegistry.findAnyLoggedOnInitiator();
-        if (initiatorSessionOpt.isEmpty()) {
-            log.warn("No logged-on initiator session found, cannot replicate order to shadow accounts. ClOrdID={}, AccountId: {}",
-                    context.getClOrdID(), primaryAccount.getId());
-            return;
-        }
-        SessionID initiatorSessionID = initiatorSessionOpt.get();
-
-        // Get shadow accounts that match copy rules
-        Character ordType = context.getOrdType() != null ? context.getOrdType() : '1'; // Default to MARKET
-        String symbol = context.getSymbol();
-        BigDecimal quantity = context.getOrderQty();
-        
-        List<Account> shadowAccounts = copyRuleService.getShadowAccountsForCopy(
-                primaryAccount, ordType, symbol, quantity);
-        
-        log.info("Found {} shadow account(s) for replication via copy rules: PrimaryAccount={}, PrimaryAccountId={}, OrdType={}, Symbol={}, Qty={}, ShadowAccounts={}",
-                shadowAccounts.size(), primaryAccount.getAccountNumber(), primaryAccount.getId(), ordType, symbol, quantity,
-                shadowAccounts.stream().map(Account::getAccountNumber).collect(Collectors.toList()));
-        
-        if (shadowAccounts.isEmpty()) {
-            log.warn("No shadow accounts found matching copy rules, cannot replicate order. ClOrdID={}, AccountId: {}, OrdType={}, Symbol={}, Qty={}",
-                    context.getClOrdID(), primaryAccount.getId(), ordType, symbol, quantity);
-            return;
-        }
-
-        // Send orders to each shadow account using copy rules
-        for (Account shadowAccount : shadowAccounts) {
-            try {
-                // Get copy rule for this account pair
-                Optional<CopyRule> ruleOpt = copyRuleService.getRuleForAccountPair(
-                        primaryAccount, shadowAccount, ordType, symbol, quantity);
-                
-                if (ruleOpt.isPresent()) {
-                    CopyRule rule = ruleOpt.get();
-                    sendOrderToShadowAccountWithRule(context, primaryAccount, shadowAccount, rule, initiatorSessionID);
-                } else {
-                    // No copy rule found - skip replication
-                    log.error("No copy rule found for account pair, cannot replicate order. PrimaryAccount={}, ShadowAccount={}",
-                            primaryAccount.getAccountNumber(), shadowAccount.getAccountNumber());
-                }
-            } catch (Exception e) {
-                log.error("Error replicating order to shadow account {} (AccountId: {}): {}", 
-                        shadowAccount.getAccountNumber(), shadowAccount.getId(), e.getMessage(), e);
-            }
-        }
-    }
-
-    /**
-     * Send order to a shadow account using copy rule.
-     * Uses ExecutionReportContext primarily for order details.
-     */
-    private void sendOrderToShadowAccountWithRule(ExecutionReportContext context, Account primaryAccount,
-                                                 Account shadowAccount, CopyRule rule, SessionID initiatorSessionID) {
-        String shadowAccountNumber = shadowAccount.getAccountNumber();
-        String clOrdId = generateShadowClOrdId(context.getClOrdID(), shadowAccountNumber);
-        
-        // Check if shadow order already exists to avoid duplicates
-        if (orderService.orderExists(clOrdId)) {
-            log.info("Shadow order already exists, skipping duplicate. ShadowClOrdID={}, PrimaryClOrdID={}",
-                    clOrdId, context.getClOrdID());
-            return;
-        }
-        
-        // Calculate copy quantity based on rule
-        BigDecimal primaryQty = context.getOrderQty();
-        BigDecimal copyQty = copyRuleService.calculateCopyQuantity(rule, primaryQty);
-        
-        // Get original route from context
-        String originalRoute = context.getExDestination();
-        
-        // Determine if this is a locate order
-        boolean isLocateOrder = originalRoute != null && routeService.isLocateRoute(originalRoute);
-        
-        // Get target route from copy rule
-        String targetRoute = copyRuleService.getTargetRoute(rule, originalRoute, isLocateOrder);
-        
-        // Build order parameters from ExecutionReport context
-        Map<String, Object> orderParams = new HashMap<>();
-        orderParams.put("clOrdID", clOrdId);
-        orderParams.put("side", context.getSide());
-        orderParams.put("symbol", context.getSymbol());
-        orderParams.put("orderQty", copyQty.intValue());
-        orderParams.put("account", shadowAccountNumber);
-        
-        // Set order type from context (from ExecutionReport tag 40)
-        char ordType = context.getOrdType() != null ? context.getOrdType() : '1'; // Default to MARKET
-        orderParams.put("ordType", ordType);
-        
-        // Set time in force from context
-        Character timeInForce = context.getTimeInForce();
-        if (timeInForce == null) {
-            timeInForce = '0'; // Default to DAY
-        }
-        orderParams.put("timeInForce", timeInForce);
-        
-        // Set price if it's a limit order (from ExecutionReport tag 44)
-        if (ordType == '2') { // LIMIT
-            if (context.getPrice() != null) {
-                orderParams.put("price", context.getPrice().doubleValue());
-            } else {
-                log.warn("Limit order (OrdType={}) has no price in ExecutionReport. ClOrdID={}, CopyClOrdID={}",
-                        ordType, context.getClOrdID(), clOrdId);
-            }
-        }
-        
-        // Set stop price if it's a stop order (from ExecutionReport tag 99)
-        if ((ordType == '3' || ordType == '4') && context.getStopPx() != null) {
-            orderParams.put("stopPx", context.getStopPx().doubleValue());
-        }
-        
-        // Set route from copy rule
-        if (targetRoute != null && !targetRoute.isBlank()) {
-            orderParams.put("exDestination", targetRoute);
-        }
-        
-        log.info("Sending copy order with rule: ClOrdID={}, PrimaryAccountId={}, ShadowAccount={}, ShadowAccountId={}, " +
-                "PrimaryQty={}, CopyQty={}, OriginalRoute={}, TargetRoute={}, IsLocate={}, RuleId={}",
-                clOrdId, primaryAccount.getId(), shadowAccountNumber, shadowAccount.getId(), 
-                primaryQty, copyQty, originalRoute, targetRoute, isLocateOrder, rule.getId());
-        
-        // Send order first
-        fixMessageSender.sendNewOrderSingle(initiatorSessionID, orderParams);
-        
-        // Create shadow order with "Staged" event asynchronously (non-blocking)
-        orderService.createShadowOrderWithStagedEventAsync(
-                context.getClOrdID(), // Primary order ClOrdID
-                shadowAccount,
-                clOrdId, // Shadow order ClOrdID
-                context.getSymbol(),
-                context.getSide(),
-                ordType,
-                copyQty,
-                context.getPrice(),
-                context.getStopPx(),
-                timeInForce,
-                targetRoute,
-                initiatorSessionID
-        );
-        
-        log.info("Copy order sent with rule: ClOrdID={}, PrimaryAccountId={}, ShadowAccount={}, ShadowAccountId={}, " +
-                "CopyQty={}, TargetRoute={}",
-                clOrdId, primaryAccount.getId(), shadowAccountNumber, shadowAccount.getId(), copyQty, targetRoute);
-    }
-
-
-    
     /**
      * Handle ExecutionReport for primary/main account orders.
      * Runs copy trades to shadow accounts when orders are filled.
@@ -674,13 +473,14 @@ public class FillOrderHandler implements ExecutionReportHandler {
         }
         
         // Check if this is a locate order (Side=BUY with ExDestination set to locate route)
+        // Regular market/limit and short sell orders are now copied in NewOrderHandler when confirmed
         if (isLocateOrder(context)) {
             handleLocateOrderReplication(context, primaryAccount);
-        } else if (context.isShortOrder()) {
-            handleShortOrderReplication(context, primaryAccount);
         } else {
-            // For regular orders (buy/sell) from primary account, replicate to shadow accounts
-            handleRegularOrderReplication(context, primaryAccount);
+            // Market/limit and short sell orders are already copied in NewOrderHandler
+            // Only locate orders need to be handled here when filled
+            log.debug("Skipping order replication - already handled in NewOrderHandler. ClOrdID={}, Account: {}, Symbol={}, OrdType={}",
+                    context.getClOrdID(), context.getAccount(), context.getSymbol(), context.getOrdType());
         }
     }
     
