@@ -116,9 +116,33 @@ public class OrderEntryApplication extends MessageCracker implements Application
 
     @Override
     public void fromAdmin(Message message, SessionID sessionID) throws FieldNotFound, IncorrectTagValue, RejectLogon {
-        // Handle "not trade day" logout messages
         try {
             String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
+            
+            // Log sequence numbers for Logon (A) and Logout (5) messages to diagnose sequence number issues
+            if ("A".equals(msgType) || "5".equals(msgType)) {
+                try {
+                    int incomingSeqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
+                    Session session = Session.lookupSession(sessionID);
+                    if (session != null) {
+                        int expectedSeqNum = session.getExpectedTargetNum();
+                        // Note: We can't easily get the current sender sequence number, but we log what we can
+                        log.info("Received {} message on initiator session {} - IncomingSeqNum={}, ExpectedTargetSeqNum={}", 
+                                "A".equals(msgType) ? "Logon" : "Logout", sessionID, incomingSeqNum, expectedSeqNum);
+                        
+                        // Check for sequence number mismatch
+                        if (incomingSeqNum != expectedSeqNum) {
+                            log.warn("Sequence number mismatch detected on {} message: IncomingSeqNum={}, ExpectedTargetSeqNum={}. " +
+                                    "This may cause session logout. SessionID={}", 
+                                    "A".equals(msgType) ? "Logon" : "Logout", incomingSeqNum, expectedSeqNum, sessionID);
+                        }
+                    }
+                } catch (Exception e) {
+                    log.debug("Could not log sequence numbers for {} message: {}", msgType, e.getMessage());
+                }
+            }
+            
+            // Handle "not trade day" logout messages
             if ("5".equals(msgType)) {
                 String text = message.isSetField(quickfix.field.Text.FIELD) ? message.getString(quickfix.field.Text.FIELD) : null;
                 if (text != null && text.toLowerCase().contains("not trade day")) {
