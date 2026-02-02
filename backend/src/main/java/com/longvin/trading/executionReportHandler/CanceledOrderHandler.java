@@ -6,6 +6,7 @@ import com.longvin.trading.entities.accounts.AccountType;
 import com.longvin.trading.fix.FixSessionRegistry;
 import com.longvin.trading.service.AccountCacheService;
 import com.longvin.trading.service.CopyRuleService;
+import com.longvin.trading.service.OrderService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -33,13 +34,16 @@ public class CanceledOrderHandler implements ExecutionReportHandler {
     private final AccountCacheService accountCacheService;
     private final FixSessionRegistry fixSessionRegistry;
     private final CopyRuleService copyRuleService;
+    private final OrderService orderService;
     
     public CanceledOrderHandler(AccountCacheService accountCacheService,
                                FixSessionRegistry fixSessionRegistry,
-                               CopyRuleService copyRuleService) {
+                               CopyRuleService copyRuleService,
+                               OrderService orderService) {
         this.accountCacheService = accountCacheService;
         this.fixSessionRegistry = fixSessionRegistry;
         this.copyRuleService = copyRuleService;
+        this.orderService = orderService;
     }
 
     @Override
@@ -55,10 +59,17 @@ public class CanceledOrderHandler implements ExecutionReportHandler {
                 context.getClOrdID(), origClOrdID, context.getOrderID(), context.getSymbol(),
                 context.getSide(), context.getOrderQty(), context.getAccount());
         
-        // Handle copy orders (shadow account orders) - just log, don't replicate
+        // Handle copy orders (shadow account orders) - create event, don't replicate
         if (context.getClOrdID() != null && context.getClOrdID().startsWith("COPY-")) {
-            log.info("Copy order canceled - no further action needed. ClOrdID={}, OrigClOrdID={}",
+            log.info("Copy order canceled - creating event. ClOrdID={}, OrigClOrdID={}",
                     context.getClOrdID(), origClOrdID);
+            try {
+                // Create event for the shadow order cancel
+                orderService.createEventForShadowOrder(context, sessionID);
+            } catch (Exception e) {
+                log.error("Error creating event for shadow order cancel: ClOrdID={}, Error={}",
+                        context.getClOrdID(), e.getMessage(), e);
+            }
             return;
         }
         
@@ -77,6 +88,16 @@ public class CanceledOrderHandler implements ExecutionReportHandler {
         }
         
         Account primaryAccount = accountOpt.get();
+        
+        // Create event for primary account order cancel
+        try {
+            orderService.createEventForOrder(context, sessionID);
+            log.debug("Created event for primary order cancel: ClOrdID={}, OrigClOrdID={}",
+                    context.getClOrdID(), origClOrdID);
+        } catch (Exception e) {
+            log.error("Error creating event for primary order cancel: ClOrdID={}, Error={}",
+                    context.getClOrdID(), e.getMessage(), e);
+        }
         
         // Get shadow accounts that match copy rules (same as ReplacedOrderHandler and NewOrderHandler)
         Character ordType = context.getOrdType() != null ? context.getOrdType() : '1'; // Default to MARKET

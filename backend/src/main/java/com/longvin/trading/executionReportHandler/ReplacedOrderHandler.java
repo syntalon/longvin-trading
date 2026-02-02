@@ -94,6 +94,16 @@ public class ReplacedOrderHandler implements ExecutionReportHandler {
         
         Account primaryAccount = accountOpt.get();
         
+        // Create event for primary account order replace
+        try {
+            orderService.createEventForOrder(context, sessionID);
+            log.debug("Created event for primary order replace: ClOrdID={}, OrigClOrdID={}",
+                    context.getClOrdID(), origClOrdID);
+        } catch (Exception e) {
+            log.error("Error creating event for primary order replace: ClOrdID={}, Error={}",
+                    context.getClOrdID(), e.getMessage(), e);
+        }
+        
         // Get shadow accounts that match copy rules (same as NewOrderHandler)
         Character ordType = context.getOrdType() != null ? context.getOrdType() : '1'; // Default to MARKET
         String symbol = context.getSymbol();
