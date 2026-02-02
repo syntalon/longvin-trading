@@ -228,7 +228,7 @@ export class OrdersComponent implements OnInit {
       '2': 'Sell',
       '3': 'Sell Short',
       '4': 'Sell Short Exempt',
-      '5': 'Buy (Locate)'
+      '5': 'Sell Short'  // Side='5' is also Sell Short (alternative FIX code)
     };
     return sideMap[side] || side;
   }
