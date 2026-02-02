@@ -50,6 +50,18 @@
       </div>
     </div>
     
+    <div class="filter-row">
+      <div class="filter-group">
+        <label for="startDate">Start Date/Time:</label>
+        <input type="datetime-local" id="startDate" [(ngModel)]="startDate">
+      </div>
+      
+      <div class="filter-group">
+        <label for="endDate">End Date/Time:</label>
+        <input type="datetime-local" id="endDate" [(ngModel)]="endDate">
+      </div>
+    </div>
+    
     <div class="filter-actions">
       <button (click)="searchOrders()" [disabled]="loading">Search</button>
       <button (click)="clearFilters()" [disabled]="loading">Clear</button>

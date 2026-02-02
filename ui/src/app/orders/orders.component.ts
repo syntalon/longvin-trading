@@ -41,6 +41,10 @@ export class OrdersComponent implements OnInit {
   execType: string = '';
   isCopyOrder: boolean | null = null;
   
+  // Date filters - default to current day (last 24 hours)
+  startDate: string = '';
+  endDate: string = '';
+  
   // Status options
   ordStatusOptions = [
     { value: '', label: 'All' },
@@ -65,7 +69,38 @@ export class OrdersComponent implements OnInit {
   constructor(private orderService: OrderService) {}
 
   ngOnInit() {
+    // Set default date range to current day (last 24 hours)
+    const now = new Date();
+    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    
+    // Format as ISO string for backend (YYYY-MM-DDTHH:mm:ss)
+    this.endDate = this.formatDateForInput(now);
+    this.startDate = this.formatDateForInput(yesterday);
+    
     this.searchOrders();
+  }
+  
+  /**
+   * Format date for input field (datetime-local format: YYYY-MM-DDTHH:mm)
+   */
+  formatDateForInput(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+  }
+  
+  /**
+   * Format date for API (ISO 8601 format: YYYY-MM-DDTHH:mm:ss)
+   * datetime-local input is in format YYYY-MM-DDTHH:mm, we just need to append :00 for seconds
+   */
+  formatDateForApi(dateString: string): string {
+    if (!dateString) return '';
+    // datetime-local format is YYYY-MM-DDTHH:mm, backend expects YYYY-MM-DDTHH:mm:ss
+    // Simply append :00 for seconds
+    return dateString + ':00';
   }
 
   searchOrders() {
@@ -100,6 +135,14 @@ export class OrdersComponent implements OnInit {
       params.isCopyOrder = this.isCopyOrder;
     }
     
+    // Add date filters
+    if (this.startDate) {
+      params.startDate = this.formatDateForApi(this.startDate);
+    }
+    if (this.endDate) {
+      params.endDate = this.formatDateForApi(this.endDate);
+    }
+    
     this.orderService.searchOrders(params).subscribe({
       next: (orders) => {
         this.orders = orders || [];
@@ -123,6 +166,13 @@ export class OrdersComponent implements OnInit {
     this.ordStatus = '';
     this.execType = '';
     this.isCopyOrder = null;
+    
+    // Reset to default date range (current day)
+    const now = new Date();
+    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    this.endDate = this.formatDateForInput(now);
+    this.startDate = this.formatDateForInput(yesterday);
+    
     this.searchParams.page = 0;
     this.searchOrders();
   }

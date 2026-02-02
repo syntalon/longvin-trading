@@ -18,6 +18,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -122,11 +123,43 @@ public class OrderController {
             } else if (execType != null) {
                 ordersPage = orderRepository.findByExecType(execType, pageable);
             } else {
-                // Default: get recent orders
-                LocalDateTime start = startDate != null ? LocalDateTime.parse(startDate) : LocalDateTime.now().minusDays(7);
+                // Default: get orders from current day (last 24 hours)
+                // If startDate/endDate are provided, use them; otherwise default to current day
                 LocalDateTime end = endDate != null ? LocalDateTime.parse(endDate) : LocalDateTime.now();
+                LocalDateTime start = startDate != null ? LocalDateTime.parse(startDate) : end.minusDays(1);
                 ordersPage = orderRepository.findByCreatedAtBetween(start, end, pageable);
             }
+            
+            // Apply date filter to all queries (if date filters provided, or default to current day)
+            LocalDateTime filterStart;
+            LocalDateTime filterEnd;
+            
+            if (startDate != null || endDate != null) {
+                // Use provided date filters
+                filterEnd = endDate != null ? LocalDateTime.parse(endDate) : LocalDateTime.now();
+                filterStart = startDate != null ? LocalDateTime.parse(startDate) : filterEnd.minusDays(1);
+            } else {
+                // Default: current day (last 24 hours)
+                filterEnd = LocalDateTime.now();
+                filterStart = filterEnd.minusDays(1);
+            }
+            
+            // Filter results by date range
+            List<Order> filteredOrders = ordersPage.getContent().stream()
+                    .filter(order -> {
+                        LocalDateTime orderTime = order.getCreatedAt();
+                        return orderTime != null && 
+                               !orderTime.isBefore(filterStart) &&
+                               !orderTime.isAfter(filterEnd);
+                    })
+                    .collect(Collectors.toList());
+            
+            // Create a new page with filtered content
+            ordersPage = new org.springframework.data.domain.PageImpl<>(
+                    filteredOrders, 
+                    pageable, 
+                    filteredOrders.size()
+            );
             
             // Filter by isCopyOrder if specified
             List<OrderDto> dtos = ordersPage.getContent().stream()
@@ -254,16 +287,49 @@ public class OrderController {
 
     /**
      * Convert Order entity to DTO.
+     * Uses the latest event to get the current order status and execution details.
      */
     private OrderDto toDto(Order order) {
         Account account = order.getAccount();
+        
+        // Get the latest event for this order to get the current status
+        // Events have the final order status from ExecutionReports
+        OrderEvent latestEvent = null;
+        if (order.getFixClOrdId() != null) {
+            List<OrderEvent> events = orderEventRepository.findByFixClOrdIdOrderByEventTimeDesc(order.getFixClOrdId());
+            if (!events.isEmpty()) {
+                latestEvent = events.get(0); // First event is the most recent (DESC order)
+            }
+        }
+        
+        // Use status fields from latest event if available, otherwise fall back to order entity
+        Character ordStatus = latestEvent != null ? latestEvent.getOrdStatus() : order.getOrdStatus();
+        Character execType = latestEvent != null ? latestEvent.getExecType() : order.getExecType();
+        BigDecimal cumQty = latestEvent != null ? latestEvent.getCumQty() : order.getCumQty();
+        BigDecimal leavesQty = latestEvent != null ? latestEvent.getLeavesQty() : order.getLeavesQty();
+        BigDecimal avgPx = latestEvent != null ? latestEvent.getAvgPx() : order.getAvgPx();
+        BigDecimal lastPx = latestEvent != null ? latestEvent.getLastPx() : order.getLastPx();
+        BigDecimal lastQty = latestEvent != null ? latestEvent.getLastQty() : order.getLastQty();
+        
+        // Use fixOrderId from latest event if available (more up-to-date)
+        String fixOrderId = latestEvent != null && latestEvent.getFixOrderId() != null 
+                ? latestEvent.getFixOrderId() 
+                : order.getFixOrderId();
+        
+        // Count events by ClOrdID (events can exist independently of orders)
+        int eventCount = 0;
+        if (order.getFixClOrdId() != null) {
+            List<OrderEvent> allEvents = orderEventRepository.findByFixClOrdIdOrderByEventTimeAsc(order.getFixClOrdId());
+            eventCount = allEvents.size();
+        }
+        
         return OrderDto.builder()
                 .id(order.getId())
                 .accountId(account != null ? account.getId() : null)
                 .accountNumber(account != null ? account.getAccountNumber() : null)
                 .accountType(account != null ? account.getAccountType() : null)
                 .primaryOrderClOrdId(order.getPrimaryOrderClOrdId())
-                .fixOrderId(order.getFixOrderId())
+                .fixOrderId(fixOrderId)
                 .fixClOrdId(order.getFixClOrdId())
                 .fixOrigClOrdId(order.getFixOrigClOrdId())
                 .symbol(order.getSymbol())
@@ -274,18 +340,18 @@ public class OrderController {
                 .price(order.getPrice())
                 .stopPx(order.getStopPx())
                 .exDestination(order.getExDestination())
-                .execType(order.getExecType())
-                .ordStatus(order.getOrdStatus())
-                .cumQty(order.getCumQty())
-                .leavesQty(order.getLeavesQty())
-                .avgPx(order.getAvgPx())
-                .lastPx(order.getLastPx())
-                .lastQty(order.getLastQty())
+                .execType(execType)
+                .ordStatus(ordStatus)
+                .cumQty(cumQty)
+                .leavesQty(leavesQty)
+                .avgPx(avgPx)
+                .lastPx(lastPx)
+                .lastQty(lastQty)
                 .createdAt(order.getCreatedAt())
                 .updatedAt(order.getUpdatedAt())
                 .isCopyOrder(order.getFixClOrdId() != null && order.getFixClOrdId().startsWith("COPY-"))
                 .isLocateOrder(isLocateOrder(order))
-                .eventCount(order.getEvents() != null ? order.getEvents().size() : 0)
+                .eventCount(eventCount)
                 .build();
     }
     

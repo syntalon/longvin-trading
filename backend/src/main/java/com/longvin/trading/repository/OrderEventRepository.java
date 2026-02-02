@@ -41,6 +41,13 @@ public interface OrderEventRepository extends JpaRepository<OrderEvent, UUID> {
     List<OrderEvent> findByFixClOrdIdOrderByEventTimeAsc(String fixClOrdId);
     
     /**
+     * Find the latest event by FIX ClOrdID (most recent event time).
+     * Returns the most recent event which contains the current order status.
+     */
+    @Query("SELECT e FROM OrderEvent e WHERE e.fixClOrdId = :fixClOrdId ORDER BY e.eventTime DESC")
+    List<OrderEvent> findByFixClOrdIdOrderByEventTimeDesc(String fixClOrdId);
+    
+    /**
      * Find event by FIX ExecID.
      */
     Optional<OrderEvent> findByFixExecId(String fixExecId);
