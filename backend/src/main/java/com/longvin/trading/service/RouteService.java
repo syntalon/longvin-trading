@@ -17,9 +17,9 @@ import java.util.Map;
  * Service for querying route metadata from the database.
  * 
  * This service provides simple queries about routes:
- * - Check if a route is a locate route (has routeType set)
- * - Get route type (TYPE_0 or TYPE_1)
- * - Get available routes for a symbol
+ * - Check if a route is exclusively for locate orders (isLocateRoute flag)
+ * - Get route type (TYPE_0 or TYPE_1) for locate routes
+ * - Get available locate routes for a symbol
  * 
  * Route selection for copying is handled by CopyRuleService.
  */
@@ -60,10 +60,14 @@ public class RouteService {
     }
 
     /**
-     * Check if a route is a locate route (has routeType set).
+     * Check if a route is exclusively for locate orders.
+     * A locate route is identified by:
+     * - Route exists in the database
+     * - Route is active
+     * - Route has isLocateRoute set to true
      * 
      * @param routeName The route name to check
-     * @return true if route exists and has routeType set, false otherwise
+     * @return true if route exists, is active, and is marked as a locate route, false otherwise
      */
     public boolean isLocateRoute(String routeName) {
         ensureInitialized();
@@ -73,7 +77,11 @@ public class RouteService {
         }
         
         Route route = routeCache.get(routeName.toUpperCase());
-        return route != null && route.getRouteType() != null;
+        // Check that route exists, is active, and is marked as a locate route
+        // Note: routeCache only contains active routes, but we check active explicitly for clarity
+        return route != null 
+                && Boolean.TRUE.equals(route.getActive()) 
+                && Boolean.TRUE.equals(route.getIsLocateRoute());
     }
 
     /**
@@ -126,7 +134,7 @@ public class RouteService {
         ensureInitialized();
         
         List<Route> locateRoutes = routeRepository.findByActiveTrue().stream()
-                .filter(r -> r.getRouteType() != null)
+                .filter(r -> Boolean.TRUE.equals(r.getIsLocateRoute()))
                 .sorted((r1, r2) -> {
                     int priorityCompare = Integer.compare(
                             r1.getPriority() != null ? r1.getPriority() : 0,

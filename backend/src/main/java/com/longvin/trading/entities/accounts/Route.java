@@ -9,11 +9,13 @@ import java.time.LocalDateTime;
  * Route entity representing a routing destination (ExDestination) for all order types.
  * 
  * Routes can be used for any order type (market, limit, stop, locate, etc.).
- * The routeType field is only relevant for locate orders:
+ * The isLocateRoute field indicates if a route is exclusively for locate orders.
+ * 
+ * For locate routes (isLocateRoute=true), the routeType field indicates the locate behavior:
  * - TYPE_0: Price inquiry first, then locate order fills directly
  * - TYPE_1: Locate order returns offer (OrdStatus=B), requires accept/reject
  * 
- * For non-locate routes, routeType should be null.
+ * For non-locate routes (isLocateRoute=false), routeType should be null.
  */
 @Entity
 @Table(name = "routes", indexes = {
@@ -50,11 +52,20 @@ public class Route {
     private String name;
 
     /**
+     * Whether this route is exclusively for locate orders.
+     * If true, this route should only be used for locate orders (BUY orders to borrow stock for short selling).
+     * If false, this route can be used for any order type (market, limit, stop, etc.).
+     */
+    @Column(name = "is_locate_route", nullable = false)
+    @Builder.Default
+    private Boolean isLocateRoute = false;
+
+    /**
      * Route type: TYPE_0 or TYPE_1 (only relevant for locate routes).
      * - TYPE_0: Price inquiry first, then locate order fills directly
      * - TYPE_1: Locate order returns offer (OrdStatus=B), requires accept/reject
      * 
-     * This field is nullable - it should only be set for locate routes.
+     * This field is nullable - it should only be set when isLocateRoute is true.
      * For regular trading routes (market, limit, etc.), this should be null.
      */
     @Enumerated(EnumType.STRING)

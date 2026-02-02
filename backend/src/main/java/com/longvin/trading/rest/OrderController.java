@@ -315,8 +315,8 @@ public class OrderController {
             return true;
         }
         
-        // Shadow locate orders: ClOrdID starts with "COPY-" AND ExDestination is a locate route
-        if (clOrdId.startsWith("COPY-")) {
+        // Shadow locate orders: ClOrdID starts with "COPY-LOC-" AND ExDestination is a locate route
+        if (clOrdId.startsWith("COPY-LOC-")) {
             String exDestination = order.getExDestination();
             if (exDestination != null && !exDestination.isBlank()) {
                 if (routeService.isLocateRoute(exDestination)) {
