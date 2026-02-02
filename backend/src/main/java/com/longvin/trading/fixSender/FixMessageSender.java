@@ -172,4 +172,97 @@ public class FixMessageSender {
         }
     }
 
+    public void sendOrderCancelReplaceRequest(SessionID sessionID, Map<String, Object> params) {
+        Message cancelReplace = new Message();
+        quickfix.Message.Header header = cancelReplace.getHeader();
+
+        header.setString(MsgType.FIELD, MsgType.ORDER_CANCEL_REPLACE_REQUEST);
+        header.setString(SenderCompID.FIELD, sessionID.getSenderCompID());
+        header.setString(TargetCompID.FIELD, sessionID.getTargetCompID());
+        //header.setUtcTimeStamp(SendingTime.FIELD, new Date());
+
+        // Validate and set required fields
+        String origClOrdID = (String) params.get("origClOrdID");
+        if (origClOrdID == null || origClOrdID.isBlank()) {
+            throw new IllegalArgumentException("origClOrdID is required and cannot be null or blank");
+        }
+        cancelReplace.setString(OrigClOrdID.FIELD, origClOrdID);
+
+        String clOrdID = (String) params.get("clOrdID");
+        if (clOrdID == null || clOrdID.isBlank()) {
+            throw new IllegalArgumentException("clOrdID is required and cannot be null or blank");
+        }
+        cancelReplace.setString(ClOrdID.FIELD, clOrdID);
+
+        Character side = (Character) params.get("side");
+        if (side == null || side == 0) {
+            throw new IllegalArgumentException("side is required and cannot be null or zero");
+        }
+        cancelReplace.setChar(Side.FIELD, side);
+
+        String symbol = (String) params.get("symbol");
+        if (symbol == null || symbol.isBlank()) {
+            throw new IllegalArgumentException("symbol is required and cannot be null or blank");
+        }
+        cancelReplace.setString(Symbol.FIELD, symbol);
+
+        Integer orderQty = (Integer) params.get("orderQty");
+        if (orderQty == null || orderQty <= 0) {
+            throw new IllegalArgumentException("orderQty is required and must be greater than 0");
+        }
+        cancelReplace.setInt(OrderQty.FIELD, orderQty);
+
+        Character ordType = (Character) params.get("ordType");
+        if (ordType == null) {
+            throw new IllegalArgumentException("ordType is required and cannot be null");
+        }
+        cancelReplace.setChar(OrdType.FIELD, ordType);
+
+        Character timeInForce = (Character) params.get("timeInForce");
+        if (timeInForce == null) {
+            throw new IllegalArgumentException("timeInForce is required and cannot be null");
+        }
+        cancelReplace.setChar(TimeInForce.FIELD, timeInForce);
+
+        if (params.containsKey("price")) {
+            Double price = (Double) params.get("price");
+            if (price != null && price > 0) {
+                cancelReplace.setDouble(Price.FIELD, price);
+            }
+        }
+
+        if (params.containsKey("stopPx")) {
+            Double stopPx = (Double) params.get("stopPx");
+            if (stopPx != null && stopPx > 0) {
+                cancelReplace.setDouble(StopPx.FIELD, stopPx);
+            }
+        }
+
+        if (params.containsKey("account")) {
+            String account = (String) params.get("account");
+            if (account != null && !account.isBlank()) {
+                cancelReplace.setString(Account.FIELD, account);
+                log.debug("Setting Account field in OrderCancelReplaceRequest: Account={}, ClOrdID={}", account, clOrdID);
+            } else {
+                log.warn("Account parameter is null or blank for ClOrdID={}, Account field will not be set", clOrdID);
+            }
+        } else {
+            log.warn("Account parameter missing in orderParams for ClOrdID={}, Account field will not be set", clOrdID);
+        }
+
+        if (params.containsKey("exDestination")) {
+            String exDestination = (String) params.get("exDestination");
+            if (exDestination != null && !exDestination.isBlank()) {
+                cancelReplace.setString(ExDestination.FIELD, exDestination);
+            }
+        }
+
+        try {
+            Session.sendToTarget(cancelReplace, sessionID);
+            log.info("Order Cancel Replace Request Message : {} sent to {}", cancelReplace, sessionID);
+        } catch (SessionNotFound e) {
+            logSendFailure("Order Cancel Replace Request", sessionID, "clOrdID", clOrdID, e);
+        }
+    }
+
 }
