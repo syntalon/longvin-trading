@@ -3,10 +3,9 @@ package com.longvin.trading.executionReportHandler;
 import com.longvin.trading.dto.messages.ExecutionReportContext;
 import com.longvin.trading.entities.accounts.Account;
 import com.longvin.trading.entities.accounts.AccountType;
-import com.longvin.trading.entities.orders.Order;
 import com.longvin.trading.fix.FixSessionRegistry;
-import com.longvin.trading.repository.OrderRepository;
 import com.longvin.trading.service.AccountCacheService;
+import com.longvin.trading.service.CopyRuleService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -16,8 +15,10 @@ import quickfix.SessionID;
 import quickfix.SessionNotFound;
 import quickfix.field.*;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Handler for canceled order ExecutionReports (ExecType=4, OrdStatus=4).
@@ -31,14 +32,14 @@ public class CanceledOrderHandler implements ExecutionReportHandler {
     
     private final AccountCacheService accountCacheService;
     private final FixSessionRegistry fixSessionRegistry;
-    private final OrderRepository orderRepository;
+    private final CopyRuleService copyRuleService;
     
     public CanceledOrderHandler(AccountCacheService accountCacheService,
                                FixSessionRegistry fixSessionRegistry,
-                               OrderRepository orderRepository) {
+                               CopyRuleService copyRuleService) {
         this.accountCacheService = accountCacheService;
         this.fixSessionRegistry = fixSessionRegistry;
-        this.orderRepository = orderRepository;
+        this.copyRuleService = copyRuleService;
     }
 
     @Override
@@ -75,28 +76,25 @@ public class CanceledOrderHandler implements ExecutionReportHandler {
             return;
         }
         
-        // Find shadow orders linked to the primary order
-        // Use origClOrdID if available, otherwise use current ClOrdID
-        String primaryClOrdId = origClOrdID;
+        Account primaryAccount = accountOpt.get();
         
-        List<Order> shadowOrders = orderRepository.findByPrimaryOrderClOrdId(primaryClOrdId);
+        // Get shadow accounts that match copy rules (same as ReplacedOrderHandler and NewOrderHandler)
+        Character ordType = context.getOrdType() != null ? context.getOrdType() : '1'; // Default to MARKET
+        String symbol = context.getSymbol();
+        BigDecimal quantity = context.getOrderQty();
         
-        // Filter to only shadow orders (those with primaryOrderClOrdId set)
-        List<Order> shadowOrdersOnly = shadowOrders.stream()
-                .filter(order -> order.getAccount() != null && 
-                        order.getAccount().getAccountType() == AccountType.SHADOW &&
-                        order.getPrimaryOrderClOrdId() != null && 
-                        order.getPrimaryOrderClOrdId().equals(primaryClOrdId))
-                .toList();
+        List<Account> shadowAccounts = copyRuleService.getShadowAccountsForCopy(
+                primaryAccount, ordType, symbol, quantity);
         
-        if (shadowOrdersOnly.isEmpty()) {
-            log.debug("No shadow orders found for primary order cancel. ClOrdID={}, OrigClOrdID={}",
-                    context.getClOrdID(), origClOrdID);
+        log.info("Found {} shadow account(s) for cancel order via copy rules: PrimaryAccount={}, PrimaryAccountId={}, OrdType={}, Symbol={}, Qty={}, ShadowAccounts={}",
+                shadowAccounts.size(), primaryAccount.getAccountNumber(), primaryAccount.getId(), ordType, symbol, quantity,
+                shadowAccounts.stream().map(Account::getAccountNumber).collect(Collectors.toList()));
+        
+        if (shadowAccounts.isEmpty()) {
+            log.warn("No shadow accounts found matching copy rules, cannot copy cancel order. ClOrdID={}, AccountId: {}, OrdType={}, Symbol={}, Qty={}",
+                    context.getClOrdID(), primaryAccount.getId(), ordType, symbol, quantity);
             return;
         }
-        
-        log.info("Found {} shadow order(s) to cancel for primary order. ClOrdID={}, OrigClOrdID={}",
-                shadowOrdersOnly.size(), context.getClOrdID(), origClOrdID);
         
         // Get initiator session for sending orders
         Optional<SessionID> initiatorSessionOpt = fixSessionRegistry.findAnyLoggedOnInitiator();
@@ -107,16 +105,19 @@ public class CanceledOrderHandler implements ExecutionReportHandler {
         }
         SessionID initiatorSessionID = initiatorSessionOpt.get();
         
+        // Determine primary ClOrdID to use for constructing shadow ClOrdID
+        // Use origClOrdID if available, otherwise use current ClOrdID
+        String primaryClOrdId = origClOrdID;
+        
         // Send cancel to each shadow account
-        for (Order shadowOrder : shadowOrdersOnly) {
+        for (Account shadowAccount : shadowAccounts) {
             try {
-                String shadowClOrdId = shadowOrder.getFixClOrdId();
-                String shadowAccountNumber = shadowOrder.getAccount().getAccountNumber();
-                sendCancelOrderToShadowAccount(shadowClOrdId, shadowAccountNumber, initiatorSessionID);
+                // Construct shadow ClOrdID: COPY-{shadowAccount}-{primaryClOrdID}
+                String shadowClOrdId = "COPY-" + shadowAccount.getAccountNumber() + "-" + primaryClOrdId;
+                sendCancelOrderToShadowAccount(shadowClOrdId, shadowAccount.getAccountNumber(), initiatorSessionID);
             } catch (Exception e) {
                 log.error("Error sending cancel order to shadow account {} (AccountId: {}): {}", 
-                        shadowOrder.getAccount().getAccountNumber(), shadowOrder.getAccount().getId(), 
-                        e.getMessage(), e);
+                        shadowAccount.getAccountNumber(), shadowAccount.getId(), e.getMessage(), e);
             }
         }
     }

@@ -4,12 +4,11 @@ import com.longvin.trading.dto.messages.ExecutionReportContext;
 import com.longvin.trading.entities.accounts.Account;
 import com.longvin.trading.entities.accounts.AccountType;
 import com.longvin.trading.entities.copy.CopyRule;
-import com.longvin.trading.entities.orders.Order;
 import com.longvin.trading.fix.FixSessionRegistry;
 import com.longvin.trading.fixSender.FixMessageSender;
-import com.longvin.trading.repository.OrderRepository;
 import com.longvin.trading.service.AccountCacheService;
 import com.longvin.trading.service.CopyRuleService;
+import com.longvin.trading.service.OrderService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -37,18 +36,18 @@ public class ReplacedOrderHandler implements ExecutionReportHandler {
     private final FixSessionRegistry fixSessionRegistry;
     private final FixMessageSender fixMessageSender;
     private final CopyRuleService copyRuleService;
-    private final OrderRepository orderRepository;
+    private final OrderService orderService;
     
     public ReplacedOrderHandler(AccountCacheService accountCacheService,
                                 FixSessionRegistry fixSessionRegistry,
                                 FixMessageSender fixMessageSender,
                                 CopyRuleService copyRuleService,
-                                OrderRepository orderRepository) {
+                                OrderService orderService) {
         this.accountCacheService = accountCacheService;
         this.fixSessionRegistry = fixSessionRegistry;
         this.fixMessageSender = fixMessageSender;
         this.copyRuleService = copyRuleService;
-        this.orderRepository = orderRepository;
+        this.orderService = orderService;
     }
 
     @Override
@@ -65,10 +64,17 @@ public class ReplacedOrderHandler implements ExecutionReportHandler {
                 context.getClOrdID(), origClOrdID, context.getOrderID(), context.getSymbol(),
                 context.getSide(), context.getOrderQty(), context.getAccount());
         
-        // Handle copy orders (shadow account orders) - just log, don't replicate
+        // Handle copy orders (shadow account orders) - just create event, don't replicate
         if (context.getClOrdID() != null && context.getClOrdID().startsWith("COPY-")) {
-            log.info("Copy order replaced - no further action needed. ClOrdID={}, OrigClOrdID={}",
+            log.info("Copy order replaced - creating event. ClOrdID={}, OrigClOrdID={}",
                     context.getClOrdID(), origClOrdID);
+            try {
+                // Create event for the shadow order replace
+                orderService.createEventForShadowOrder(context, sessionID);
+            } catch (Exception e) {
+                log.error("Error creating event for shadow order replace: ClOrdID={}, Error={}", 
+                        context.getClOrdID(), e.getMessage(), e);
+            }
             return;
         }
         
@@ -144,45 +150,29 @@ public class ReplacedOrderHandler implements ExecutionReportHandler {
                                                  Account shadowAccount, CopyRule rule, SessionID initiatorSessionID) {
         String shadowAccountNumber = shadowAccount.getAccountNumber();
         
-        // Find existing shadow order to get its current ClOrdID
-        // This is needed because OrigClOrdID might not be in the ExecutionReport
-        List<Order> shadowOrders = orderRepository.findByPrimaryOrderClOrdId(context.getClOrdID());
-        Optional<Order> existingShadowOrder = shadowOrders.stream()
-                .filter(order -> order.getAccount() != null && 
-                        order.getAccount().getId().equals(shadowAccount.getId()) &&
-                        order.getPrimaryOrderClOrdId() != null &&
-                        order.getPrimaryOrderClOrdId().equals(context.getClOrdID()))
-                .findFirst();
+        // Determine original and new shadow ClOrdIDs
+        // Shadow order ClOrdID pattern: COPY-{shadowAccount}-{primaryClOrdID}
+        // We don't need to update the shadow order entity's ClOrdID - it stays as COPY-{account}-{primaryClOrdID}
+        // We only need different ClOrdIDs in the replace request to satisfy FIX protocol
         
-        String originalShadowClOrdId;
-        String newShadowClOrdId;
-        
-        if (existingShadowOrder.isPresent()) {
-            // Found existing shadow order - use its actual ClOrdID as the original
-            originalShadowClOrdId = existingShadowOrder.get().getFixClOrdId();
-            log.debug("Found existing shadow order: ClOrdID={}, PrimaryClOrdID={}",
-                    originalShadowClOrdId, context.getClOrdID());
-        } else {
-            // No existing shadow order found - construct it from primary ClOrdID
-            // Use origClOrdID if available, otherwise use current ClOrdID
-            String originalPrimaryClOrdId = (context.getOrigClOrdID() != null && !context.getOrigClOrdID().equals("N/A")) 
-                    ? context.getOrigClOrdID() 
-                    : context.getClOrdID();
-            originalShadowClOrdId = "COPY-" + shadowAccountNumber + "-" + originalPrimaryClOrdId;
-            log.warn("No existing shadow order found. Constructed original ClOrdID: {}, PrimaryClOrdID={}, OrigClOrdID={}",
-                    originalShadowClOrdId, context.getClOrdID(), context.getOrigClOrdID());
-        }
+        // Original shadow ClOrdID: Use origClOrdID if available, otherwise use current ClOrdID
+        String originalPrimaryClOrdId = (context.getOrigClOrdID() != null && !context.getOrigClOrdID().equals("N/A")) 
+                ? context.getOrigClOrdID() 
+                : context.getClOrdID();
+        String originalShadowClOrdId = "COPY-" + shadowAccountNumber + "-" + originalPrimaryClOrdId;
         
         // New shadow ClOrdID: COPY-{shadowAccount}-{newPrimaryClOrdID}
-        newShadowClOrdId = "COPY-" + shadowAccountNumber + "-" + context.getClOrdID();
+        String newShadowClOrdId = "COPY-" + shadowAccountNumber + "-" + context.getClOrdID();
         
-        // If both ClOrdIDs are the same, we still need to send the replace if other fields changed
-        // But FIX protocol requires different ClOrdIDs for replace - generate a new one if needed
+        // FIX protocol requires ClOrdID != OrigClOrdID in replace request
+        // If both are the same (primary ClOrdID didn't change), use a temporary unique ClOrdID for the request
+        // The shadow order entity keeps its ClOrdID pattern - we don't update it
         if (originalShadowClOrdId.equals(newShadowClOrdId)) {
-            // Primary ClOrdID didn't change, but we still need to replace (price/qty change)
-            // Generate a new ClOrdID by appending a suffix
-            newShadowClOrdId = originalShadowClOrdId + "-REPLACE";
-            log.info("Primary ClOrdID unchanged, generating new shadow ClOrdID for replace: {} -> {}",
+            // Primary ClOrdID didn't change, but FIX requires different ClOrdIDs for replace
+            // Generate a temporary unique ClOrdID just for this replace request
+            long timestamp = System.currentTimeMillis();
+            newShadowClOrdId = originalShadowClOrdId + "-R" + timestamp;
+            log.info("Primary ClOrdID unchanged, using temporary ClOrdID for replace request: {} -> {}",
                     originalShadowClOrdId, newShadowClOrdId);
         }
         
