@@ -4,6 +4,7 @@ import com.longvin.trading.dto.messages.ExecutionReportContext;
 import com.longvin.trading.entities.accounts.Account;
 import com.longvin.trading.entities.accounts.AccountType;
 import com.longvin.trading.entities.copy.CopyRule;
+import com.longvin.trading.entities.orders.OrderEvent;
 import com.longvin.trading.fix.FixSessionRegistry;
 import com.longvin.trading.fixSender.FixMessageSender;
 import com.longvin.trading.service.AccountCacheService;
@@ -66,14 +67,16 @@ public class ReplacedOrderHandler implements ExecutionReportHandler {
         
         // Handle copy orders (shadow account orders) - just create event, don't replicate
         if (context.getClOrdID() != null && context.getClOrdID().startsWith("COPY-")) {
-            log.info("Copy order replaced - creating event. ClOrdID={}, OrigClOrdID={}",
-                    context.getClOrdID(), origClOrdID);
+            log.info("Copy order replaced - creating event. ClOrdID={}, OrigClOrdID={}, Account={}, ExecType={}, OrdStatus={}",
+                    context.getClOrdID(), origClOrdID, context.getAccount(), context.getExecType(), context.getOrdStatus());
             try {
                 // Create event for the shadow order replace
-                orderService.createEventForShadowOrder(context, sessionID);
+                OrderEvent event = orderService.createEventForShadowOrder(context, sessionID);
+                log.info("Successfully created replace event for shadow order: ClOrdID={}, EventId={}, ExecType={}, OrdStatus={}",
+                        context.getClOrdID(), event != null ? event.getId() : "null", context.getExecType(), context.getOrdStatus());
             } catch (Exception e) {
-                log.error("Error creating event for shadow order replace: ClOrdID={}, Error={}", 
-                        context.getClOrdID(), e.getMessage(), e);
+                log.error("Error creating event for shadow order replace: ClOrdID={}, OrigClOrdID={}, Account={}, Error={}", 
+                        context.getClOrdID(), origClOrdID, context.getAccount(), e.getMessage(), e);
             }
             return;
         }

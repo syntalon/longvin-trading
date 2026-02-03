@@ -770,8 +770,8 @@ public class OrderService {
 
     /**
      * Create event for a shadow order (event-driven: order not required).
-     * Used in NewOrderHandler when broker confirms the shadow order.
-     * Creates event with ExecType='0', OrdStatus='0' (New).
+     * Used in handlers when broker sends ExecutionReports for shadow orders.
+     * Creates event with the ExecType and OrdStatus from the ExecutionReport.
      * The order can be created later and linked to this event.
      * 
      * @param context ExecutionReportContext containing order information
@@ -780,8 +780,14 @@ public class OrderService {
      */
     @Transactional
     public OrderEvent createEventForShadowOrder(ExecutionReportContext context, SessionID sessionID) {
+        log.debug("Creating event for shadow order: ClOrdID={}, ExecType={}, OrdStatus={}, Account={}",
+                context.getClOrdID(), context.getExecType(), context.getOrdStatus(), context.getAccount());
         // Event-driven: create event directly, order is optional
-        return createEventFromExecutionReport(context, sessionID);
+        OrderEvent event = createEventFromExecutionReport(context, sessionID);
+        log.info("Created event for shadow order: ClOrdID={}, EventId={}, ExecType={}, OrdStatus={}, Account={}",
+                context.getClOrdID(), event != null ? event.getId() : "null", 
+                context.getExecType(), context.getOrdStatus(), context.getAccount());
+        return event;
     }
 
     /**
@@ -797,6 +803,73 @@ public class OrderService {
     public OrderEvent createEventForOrder(ExecutionReportContext context, SessionID sessionID) {
         // Event-driven: create event directly, order is optional
         return createEventFromExecutionReport(context, sessionID);
+    }
+    
+    /**
+     * Create event for Order Cancel Reject (MsgType=9).
+     * This is sent by the broker when a cancel request is rejected.
+     * 
+     * @param orderClOrdId The ClOrdID of the order that was being canceled (OrigClOrdID from reject message)
+     * @param rejectClOrdId The ClOrdID from the reject message (may be different if it was a replace)
+     * @param cxlRejReason The cancel reject reason code
+     * @param text The reject text/explanation
+     * @param account The account number
+     * @param sessionID FIX session ID
+     * @return Created OrderEvent
+     */
+    @Transactional
+    public OrderEvent createCancelRejectEvent(String orderClOrdId, String rejectClOrdId, int cxlRejReason, 
+                                             String text, String account, SessionID sessionID) {
+        // Try to find the order
+        Order order = findOrderByClOrdId(orderClOrdId);
+        
+        // Build reject text with reason
+        String rejectText = text != null ? text : "Cancel rejected";
+        if (cxlRejReason > 0) {
+            rejectText = String.format("Cancel rejected (reason=%d): %s", cxlRejReason, rejectText);
+        }
+        
+        // Create event for cancel reject
+        // Use a special ExecType='9' to indicate cancel reject (not standard FIX ExecType, but clear for our system)
+        // The order status should remain as it was before the cancel attempt
+        OrderEvent event = OrderEvent.builder()
+                .order(order) // Can be null - event can exist independently
+                .fixExecId(rejectClOrdId != null ? rejectClOrdId + "-CXLREJ" : orderClOrdId + "-CXLREJ-" + System.currentTimeMillis())
+                .execType('9') // Use '9' to indicate cancel reject (not standard FIX, but clear for our system)
+                .ordStatus(order != null ? order.getOrdStatus() : '0') // Keep original status
+                .fixOrderId(order != null ? order.getFixOrderId() : null)
+                .fixClOrdId(rejectClOrdId != null ? rejectClOrdId : orderClOrdId)
+                .fixOrigClOrdId(orderClOrdId) // The original order we tried to cancel
+                .symbol(order != null ? order.getSymbol() : null)
+                .side(order != null ? order.getSide() : null)
+                .ordType(order != null ? order.getOrdType() : null)
+                .timeInForce(order != null ? order.getTimeInForce() : null)
+                .orderQty(order != null ? order.getOrderQty() : null)
+                .price(order != null ? order.getPrice() : null)
+                .stopPx(order != null ? order.getStopPx() : null)
+                .lastPx(null)
+                .lastQty(null)
+                .cumQty(order != null ? order.getCumQty() : null)
+                .leavesQty(order != null ? order.getLeavesQty() : null)
+                .avgPx(order != null ? order.getAvgPx() : null)
+                .account(account)
+                .transactTime(java.time.LocalDateTime.now())
+                .text(rejectText)
+                .sessionId(sessionID != null ? sessionID.toString() : null)
+                .build();
+        
+        event = orderEventRepository.save(event);
+        
+        // Link to order if found
+        if (order != null) {
+            order.addEvent(event);
+            orderRepository.save(order);
+        }
+        
+        log.info("Created cancel reject event: OrderClOrdID={}, RejectClOrdID={}, CxlRejReason={}, EventId={}, OrderId={}", 
+                orderClOrdId, rejectClOrdId, cxlRejReason, event.getId(), order != null ? order.getId() : "null");
+        
+        return event;
     }
 }
 

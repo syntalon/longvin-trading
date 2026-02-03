@@ -2,6 +2,7 @@ package com.longvin.trading.fix;
 
 import com.longvin.trading.config.FixClientProperties;
 import com.longvin.trading.executionReportHandler.ExecutionReportProcessor;
+import com.longvin.trading.service.OrderService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -20,15 +21,18 @@ public class OrderEntryApplication extends MessageCracker implements Application
     private final FixSessionRegistry sessionRegistry;
     private final InitiatorLogonGuard initiatorLogonGuard;
     private final ExecutionReportProcessor executionReportProcessor;
+    private final OrderService orderService;
 
     public OrderEntryApplication(FixClientProperties properties,
                                  FixSessionRegistry sessionRegistry,
                                  InitiatorLogonGuard initiatorLogonGuard,
-                                 ExecutionReportProcessor executionReportProcessor) {
+                                 ExecutionReportProcessor executionReportProcessor,
+                                 OrderService orderService) {
         this.properties = properties;
         this.sessionRegistry = sessionRegistry;
         this.initiatorLogonGuard = initiatorLogonGuard;
         this.executionReportProcessor = executionReportProcessor;
+        this.orderService = orderService;
     }
 
     @Override
@@ -192,16 +196,27 @@ public class OrderEntryApplication extends MessageCracker implements Application
                 }
             }
             
-            // Handle RejectLogon - this happens when OPAL rejects our logon attempt
+            // Handle Reject (3) messages - this happens when OPAL rejects any message
             if ("3".equals(msgType)) {
                 try {
                     String refMsgType = message.isSetField(quickfix.field.RefMsgType.FIELD) ? message.getString(quickfix.field.RefMsgType.FIELD) : null;
+                    String text = message.isSetField(quickfix.field.Text.FIELD) ? message.getString(quickfix.field.Text.FIELD) : null;
+                    int refSeqNum = message.isSetField(quickfix.field.RefSeqNum.FIELD) ? message.getInt(quickfix.field.RefSeqNum.FIELD) : 0;
+                    int sessionRejectReason = message.isSetField(quickfix.field.SessionRejectReason.FIELD) ? 
+                            message.getInt(quickfix.field.SessionRejectReason.FIELD) : 0;
+                    
                     if ("A".equals(refMsgType)) {
                         // This is a reject of our logon request
-                        String text = message.isSetField(quickfix.field.Text.FIELD) ? message.getString(quickfix.field.Text.FIELD) : null;
-                        int refSeqNum = message.isSetField(quickfix.field.RefSeqNum.FIELD) ? message.getInt(quickfix.field.RefSeqNum.FIELD) : 0;
-                        log.error("OPAL rejected Logon request on initiator session {} - RefSeqNum={}, Text={}", 
-                                sessionID, refSeqNum, text != null ? text : "no reason provided");
+                        log.error("OPAL rejected Logon request on initiator session {} - RefSeqNum={}, RejectReason={}, Text={}", 
+                                sessionID, refSeqNum, sessionRejectReason, text != null ? text : "no reason provided");
+                    } else if ("R".equals(refMsgType)) {
+                        // This is a reject of our Short Locate Quote Request
+                        log.error("OPAL rejected Short Locate Quote Request on initiator session {} - RefSeqNum={}, RejectReason={}, Text={}", 
+                                sessionID, refSeqNum, sessionRejectReason, text != null ? text : "no reason provided");
+                    } else {
+                        // Other reject
+                        log.warn("OPAL rejected message on initiator session {} - RefMsgType={}, RefSeqNum={}, RejectReason={}, Text={}", 
+                                sessionID, refMsgType, refSeqNum, sessionRejectReason, text != null ? text : "no reason provided");
                     }
                 } catch (Exception e) {
                     log.debug("Could not process reject message: {}", e.getMessage());
@@ -248,6 +263,22 @@ public class OrderEntryApplication extends MessageCracker implements Application
     public void onMessage(Message message, SessionID sessionID)
             throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
         String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
+        
+        // Log all incoming messages on initiator session for debugging
+        try {
+            int seqNum = message.getHeader().getInt(quickfix.field.MsgSeqNum.FIELD);
+            String senderCompId = message.getHeader().getString(quickfix.field.SenderCompID.FIELD);
+            String targetCompId = message.getHeader().getString(quickfix.field.TargetCompID.FIELD);
+            String msgTypeName = getMsgTypeName(msgType);
+            
+            // Log non-heartbeat messages at INFO level
+            if (!"0".equals(msgType)) {
+                log.info("Received message on initiator session {}: MsgType={} ({}), SeqNum={}, From={}->{}", 
+                        sessionID, msgType, msgTypeName, seqNum, senderCompId, targetCompId);
+            }
+        } catch (Exception e) {
+            log.debug("Could not log message details: {}", e.getMessage());
+        }
 
         // Log incoming heartbeats at DEBUG level
         if ("0".equals(msgType)) {
@@ -263,6 +294,37 @@ public class OrderEntryApplication extends MessageCracker implements Application
             return;
         }
 
+        // Handle Order Cancel Reject (MsgType=9) - broker rejected our cancel request
+        if ("9".equals(msgType)) {
+            try {
+                String clOrdID = message.isSetField(quickfix.field.ClOrdID.FIELD) ? 
+                        message.getString(quickfix.field.ClOrdID.FIELD) : null;
+                String origClOrdID = message.isSetField(quickfix.field.OrigClOrdID.FIELD) ? 
+                        message.getString(quickfix.field.OrigClOrdID.FIELD) : null;
+                int cxlRejReason = message.isSetField(quickfix.field.CxlRejReason.FIELD) ? 
+                        message.getInt(quickfix.field.CxlRejReason.FIELD) : 0;
+                String text = message.isSetField(quickfix.field.Text.FIELD) ? 
+                        message.getString(quickfix.field.Text.FIELD) : null;
+                String account = message.isSetField(quickfix.field.Account.FIELD) ? 
+                        message.getString(quickfix.field.Account.FIELD) : null;
+                
+                log.warn("Received Order Cancel Reject (MsgType=9) on initiator session {}: ClOrdID={}, OrigClOrdID={}, CxlRejReason={}, Text={}, Account={}", 
+                        sessionID, clOrdID, origClOrdID, cxlRejReason, text, account);
+                
+                // Create event for the cancel reject
+                // Use OrigClOrdID to find the order (that's the order we tried to cancel)
+                String orderClOrdId = origClOrdID != null ? origClOrdID : clOrdID;
+                if (orderClOrdId != null) {
+                    orderService.createCancelRejectEvent(orderClOrdId, clOrdID, cxlRejReason, text, account, sessionID);
+                } else {
+                    log.warn("Cannot create cancel reject event: both ClOrdID and OrigClOrdID are null");
+                }
+            } catch (Exception e) {
+                log.error("Error processing Order Cancel Reject: {}", e.getMessage(), e);
+            }
+            return;
+        }
+        
         // Handle ExecutionReports (MsgType=8) and Short Locate Quote Responses (MsgType=S)
         // Both are processed by the ExecutionReportProcessor chain
         // Note: Short Locate Quote Response comes on initiator session because the request was sent on initiator session
@@ -330,5 +392,26 @@ public class OrderEntryApplication extends MessageCracker implements Application
      */
     public boolean resetSequenceNumbersTo1(SessionID sessionID) {
         return resetSequenceNumbers(sessionID, 1);
+    }
+    
+    private String getMsgTypeName(String msgType) {
+        return switch (msgType) {
+            case "0" -> "Heartbeat";
+            case "1" -> "TestRequest";
+            case "2" -> "ResendRequest";
+            case "3" -> "Reject";
+            case "4" -> "SequenceReset";
+            case "5" -> "Logout";
+            case "9" -> "OrderCancelReject";
+            case "A" -> "Logon";
+            case "D" -> "NewOrderSingle";
+            case "8" -> "ExecutionReport";
+            case "F" -> "OrderCancelRequest";
+            case "G" -> "OrderCancelReplaceRequest";
+            case "R" -> "ShortLocateQuoteRequest";
+            case "S" -> "ShortLocateQuoteResponse";
+            case "p" -> "ShortLocateAcceptReject";
+            default -> "Unknown(" + msgType + ")";
+        };
     }
 }
