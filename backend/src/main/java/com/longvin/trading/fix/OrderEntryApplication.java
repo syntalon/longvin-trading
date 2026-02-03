@@ -142,8 +142,12 @@ public class OrderEntryApplication extends MessageCracker implements Application
                         boolean opalRequestedReset = message.isSetField(quickfix.field.ResetSeqNumFlag.FIELD) && 
                                                      message.getBoolean(quickfix.field.ResetSeqNumFlag.FIELD);
                         
-                        log.info("Received Logon response on initiator session {} - IncomingSeqNum={}, ExpectedTargetSeqNum={}, OPALRequestedReset={}", 
-                                sessionID, incomingSeqNum, expectedSeqNum, opalRequestedReset);
+                        // Check for any text/reason in the logon response
+                        String text = message.isSetField(quickfix.field.Text.FIELD) ? message.getString(quickfix.field.Text.FIELD) : null;
+                        
+                        log.info("Received Logon response on initiator session {} - IncomingSeqNum={}, ExpectedTargetSeqNum={}, OPALRequestedReset={}, Text={}", 
+                                sessionID, incomingSeqNum, expectedSeqNum, opalRequestedReset, 
+                                text != null ? text : "none");
                         
                         // If OPAL requested reset, sequence numbers should already be reset by QuickFIX/J
                         // But if there's still a mismatch, we need to sync to OPAL's sequence number
@@ -171,8 +175,10 @@ public class OrderEntryApplication extends MessageCracker implements Application
                     Session session = Session.lookupSession(sessionID);
                     if (session != null) {
                         int expectedSeqNum = session.getExpectedTargetNum();
-                        log.info("Received Logout message on initiator session {} - IncomingSeqNum={}, ExpectedTargetSeqNum={}", 
-                                sessionID, incomingSeqNum, expectedSeqNum);
+                        String text = message.isSetField(quickfix.field.Text.FIELD) ? message.getString(quickfix.field.Text.FIELD) : null;
+                        
+                        log.warn("Received Logout message on initiator session {} - IncomingSeqNum={}, ExpectedTargetSeqNum={}, Text={}", 
+                                sessionID, incomingSeqNum, expectedSeqNum, text != null ? text : "none");
                         
                         // Check for sequence number mismatch on logout
                         if (incomingSeqNum != expectedSeqNum) {
@@ -183,6 +189,22 @@ public class OrderEntryApplication extends MessageCracker implements Application
                     }
                 } catch (Exception e) {
                     log.debug("Could not log sequence numbers for Logout message: {}", e.getMessage());
+                }
+            }
+            
+            // Handle RejectLogon - this happens when OPAL rejects our logon attempt
+            if ("3".equals(msgType)) {
+                try {
+                    String refMsgType = message.isSetField(quickfix.field.RefMsgType.FIELD) ? message.getString(quickfix.field.RefMsgType.FIELD) : null;
+                    if ("A".equals(refMsgType)) {
+                        // This is a reject of our logon request
+                        String text = message.isSetField(quickfix.field.Text.FIELD) ? message.getString(quickfix.field.Text.FIELD) : null;
+                        int refSeqNum = message.isSetField(quickfix.field.RefSeqNum.FIELD) ? message.getInt(quickfix.field.RefSeqNum.FIELD) : 0;
+                        log.error("OPAL rejected Logon request on initiator session {} - RefSeqNum={}, Text={}", 
+                                sessionID, refSeqNum, text != null ? text : "no reason provided");
+                    }
+                } catch (Exception e) {
+                    log.debug("Could not process reject message: {}", e.getMessage());
                 }
             }
             
