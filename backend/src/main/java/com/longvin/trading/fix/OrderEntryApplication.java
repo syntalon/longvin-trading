@@ -269,13 +269,25 @@ public class OrderEntryApplication extends MessageCracker implements Application
         // This is different from ExecutionReports which come from drop copy session (DAST->OS111)
         if (quickfix.field.MsgType.EXECUTION_REPORT.equals(msgType) || "S".equals(msgType)) {
             if ("S".equals(msgType)) {
-                log.info("Received Short Locate Quote Response (MsgType=S) on initiator session {} (OS111->OPAL). " +
-                        "This is expected because the Short Locate Quote Request was sent on this session. Message: {}", 
-                        sessionID, message);
+                try {
+                    String quoteReqID = message.isSetField(quickfix.field.QuoteReqID.FIELD) ? 
+                            message.getString(quickfix.field.QuoteReqID.FIELD) : "not set";
+                    log.info("Received Short Locate Quote Response (MsgType=S) on initiator session {} (OS111->OPAL). " +
+                            "QuoteReqID={}, RawMessage={}", 
+                            sessionID, quoteReqID, message);
+                } catch (Exception e) {
+                    log.warn("Error logging Short Locate Quote Response details: {}", e.getMessage());
+                }
             }
-            executionReportProcessor.process(message, sessionID);
+            try {
+                executionReportProcessor.process(message, sessionID);
+            } catch (Exception e) {
+                log.error("Error processing message in ExecutionReportProcessor: MsgType={}, SessionID={}, Error={}", 
+                        msgType, sessionID, e.getMessage(), e);
+            }
         } else {
             // Other message types
+            log.debug("Received other message type on initiator session: MsgType={}, SessionID={}", msgType, sessionID);
             crack(message, sessionID);
         }
     }

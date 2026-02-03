@@ -205,10 +205,11 @@ public class OrderService {
             orderRepository.save(order);
         }
         
-        log.debug("Created order event: ClOrdID={}, ExecType={}, OrdStatus={}, OrderId={}, IsShadowAccount={}", 
+        log.info("Created order event: ClOrdID={}, ExecType={}, OrdStatus={}, OrderId={}, IsShadowAccount={}, Account={}", 
                 context.getClOrdID(), context.getExecType(), context.getOrdStatus(), 
                 order != null ? order.getId() : "null",
-                order != null && order.getAccount() != null && order.getAccount().getAccountType() == AccountType.SHADOW);
+                order != null && order.getAccount() != null && order.getAccount().getAccountType() == AccountType.SHADOW,
+                context.getAccount());
         
         return event;
     }
