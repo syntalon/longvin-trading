@@ -166,6 +166,24 @@ public class OrderService {
      * For shadow account orders, we only create events and don't update the order.
      */
     private OrderEvent createOrderEvent(Order order, ExecutionReportContext context, SessionID sessionID) {
+        // Determine account - prefer from context, fallback to order, then extract from ClOrdID
+        String account = context.getAccount();
+        if (account == null || account.isBlank()) {
+            if (order != null && order.getAccount() != null) {
+                account = order.getAccount().getAccountNumber();
+                log.debug("Account missing from ExecutionReport, using account from order: ClOrdID={}, Account={}", 
+                        context.getClOrdID(), account);
+            } else if (context.getClOrdID() != null && context.getClOrdID().startsWith("COPY-")) {
+                // Extract account from ClOrdID pattern: COPY-{account}-{primaryClOrdID}
+                String[] parts = context.getClOrdID().split("-");
+                if (parts.length >= 2) {
+                    account = parts[1]; // Second part is the account
+                    log.debug("Account missing from ExecutionReport, extracted from ClOrdID: ClOrdID={}, Account={}", 
+                            context.getClOrdID(), account);
+                }
+            }
+        }
+        
         OrderEvent event = OrderEvent.builder()
                 .order(order) // Can be null - event can exist independently
                 .fixExecId(context.getOrderID() != null ? context.getOrderID() : 
@@ -187,7 +205,7 @@ public class OrderService {
                 .cumQty(context.getCumQty())
                 .leavesQty(context.getLeavesQty())
                 .avgPx(context.getAvgPx())
-                .account(context.getAccount())
+                .account(account) // Use determined account (from context, order, or ClOrdID)
                 .transactTime(context.getTransactTime())
                 .text(context.getText())
                 .sessionId(sessionID != null ? sessionID.toString() : null)
@@ -209,7 +227,7 @@ public class OrderService {
                 context.getClOrdID(), context.getExecType(), context.getOrdStatus(), 
                 order != null ? order.getId() : "null",
                 order != null && order.getAccount() != null && order.getAccount().getAccountType() == AccountType.SHADOW,
-                context.getAccount());
+                account);
         
         return event;
     }
