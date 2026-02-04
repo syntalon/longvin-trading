@@ -215,10 +215,19 @@ public class OrderService {
         // The order link is already set in the builder if order != null
         event = orderEventRepository.save(event);
         
-        // Optionally update order's events collection if order exists (for convenience, not required)
-        // Events are primarily queried by ClOrdID, not by order relationship
-        // This linking is optional and doesn't create a dependency - events can exist without orders
+        // Update order if it exists
         if (order != null) {
+            // For shadow account orders, update fixOrderId if it's not set yet
+            // This allows us to query events by fixOrderId, which is simpler and more reliable
+            if (order.getAccount() != null && order.getAccount().getAccountType() == AccountType.SHADOW) {
+                if ((order.getFixOrderId() == null || order.getFixOrderId().isBlank()) 
+                        && context.getOrderID() != null && !context.getOrderID().isBlank()) {
+                    order.setFixOrderId(context.getOrderID());
+                    log.debug("Updated fixOrderId for shadow order: ClOrdID={}, FixOrderId={}", 
+                            context.getClOrdID(), context.getOrderID());
+                }
+            }
+            
             // Update the order's events collection (optional, for convenience queries)
             order.addEvent(event);
             orderRepository.save(order);

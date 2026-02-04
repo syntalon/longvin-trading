@@ -246,9 +246,24 @@ public class OrderController {
                 return ResponseEntity.notFound().build();
             }
             Order order = orderOpt.get();
-            // If order has ClOrdID, query by ClOrdID/OrigClOrdID/fixOrderId to catch all related events
-            // This includes events where ExecutionReport uses OrderID as ClOrdID
-            if (order.getFixClOrdId() != null) {
+            // Prefer querying by fixOrderId if available - it's simpler and more reliable
+            // OrderID remains constant even when ClOrdID changes due to replaces
+            // For shadow orders, fixOrderId might not be set in order entity, so get it from events first
+            String fixOrderId = order.getFixOrderId();
+            if ((fixOrderId == null || fixOrderId.isBlank()) && order.getFixClOrdId() != null) {
+                // Try to get fixOrderId from the first event (shadow orders might not have it in order entity)
+                List<OrderEvent> firstEvents = orderEventRepository.findByClOrdIdOrOrigClOrdIdOrderByEventTimeAsc(order.getFixClOrdId());
+                if (!firstEvents.isEmpty() && firstEvents.get(0).getFixOrderId() != null) {
+                    fixOrderId = firstEvents.get(0).getFixOrderId();
+                    log.debug("Retrieved fixOrderId from event for shadow order: ClOrdID={}, FixOrderId={}", 
+                            order.getFixClOrdId(), fixOrderId);
+                }
+            }
+            
+            if (fixOrderId != null && !fixOrderId.isBlank()) {
+                events = orderEventRepository.findByFixOrderIdOrderByEventTimeAsc(fixOrderId);
+            } else if (order.getFixClOrdId() != null) {
+                // Fallback to ClOrdID/OrigClOrdID query if fixOrderId is not available
                 events = orderEventRepository.findByClOrdIdOrOrigClOrdIdOrFixOrderIdOrderByEventTimeAsc(
                         order.getFixClOrdId(), order.getFixOrderId());
             } else {
@@ -307,17 +322,29 @@ public class OrderController {
         
         // Get the latest event for this order to get the current status
         // Events have the final order status from ExecutionReports
-        // Query events by ClOrdID, OrigClOrdID, or fixOrderId to include:
-        // - Replace events with temporary ClOrdIDs
-        // - Events where ExecutionReport uses OrderID as ClOrdID instead of COPY- prefix
+        // Prefer querying by fixOrderId - it's simpler and OrderID remains constant even when ClOrdID changes
+        // For shadow orders, fixOrderId might not be set in order entity, so get it from events first
         OrderEvent latestEvent = null;
-        if (order.getFixClOrdId() != null) {
-            // Find events that match this ClOrdID, have it as OrigClOrdID, or have matching fixOrderId
-            // This handles cases where DAS Trader sends ExecutionReports with OrderID as ClOrdID
+        String fixOrderId = order.getFixOrderId();
+        if ((fixOrderId == null || fixOrderId.isBlank()) && order.getFixClOrdId() != null) {
+            // Try to get fixOrderId from the first event (shadow orders might not have it in order entity)
+            List<OrderEvent> firstEvents = orderEventRepository.findByClOrdIdOrOrigClOrdIdOrderByEventTimeAsc(order.getFixClOrdId());
+            if (!firstEvents.isEmpty() && firstEvents.get(0).getFixOrderId() != null) {
+                fixOrderId = firstEvents.get(0).getFixOrderId();
+            }
+        }
+        
+        if (fixOrderId != null && !fixOrderId.isBlank()) {
+            // Query by fixOrderId - simplest and most reliable for shadow account orders
+            List<OrderEvent> events = orderEventRepository.findByFixOrderIdOrderByEventTimeDesc(fixOrderId);
+            if (!events.isEmpty()) {
+                latestEvent = events.get(0);
+            }
+        } else if (order.getFixClOrdId() != null) {
+            // Fallback to ClOrdID/OrigClOrdID query if fixOrderId is not available
             List<OrderEvent> events = orderEventRepository.findByClOrdIdOrOrigClOrdIdOrFixOrderIdOrderByEventTimeDesc(
                     order.getFixClOrdId(), order.getFixOrderId());
             if (!events.isEmpty()) {
-                // First event is the most recent (DESC order)
                 latestEvent = events.get(0);
             }
         }
@@ -332,14 +359,19 @@ public class OrderController {
         BigDecimal lastQty = latestEvent != null ? latestEvent.getLastQty() : order.getLastQty();
         
         // Use fixOrderId from latest event if available (more up-to-date)
-        String fixOrderId = latestEvent != null && latestEvent.getFixOrderId() != null 
-                ? latestEvent.getFixOrderId() 
-                : order.getFixOrderId();
+        // Reuse the fixOrderId we already retrieved above, or get from latest event
+        String finalFixOrderId = fixOrderId != null && !fixOrderId.isBlank() 
+                ? fixOrderId 
+                : (latestEvent != null && latestEvent.getFixOrderId() != null 
+                        ? latestEvent.getFixOrderId() 
+                        : order.getFixOrderId());
         
-        // Count events by ClOrdID, OrigClOrdID, or fixOrderId (events can exist independently of orders)
-        // This includes replace events with temporary ClOrdIDs and events where OrderID is used as ClOrdID
+        // Count events - use the fixOrderId we already retrieved above
         int eventCount = 0;
-        if (order.getFixClOrdId() != null) {
+        if (fixOrderId != null && !fixOrderId.isBlank()) {
+            List<OrderEvent> allEvents = orderEventRepository.findByFixOrderIdOrderByEventTimeAsc(fixOrderId);
+            eventCount = allEvents.size();
+        } else if (order.getFixClOrdId() != null) {
             List<OrderEvent> allEvents = orderEventRepository.findByClOrdIdOrOrigClOrdIdOrFixOrderIdOrderByEventTimeAsc(
                     order.getFixClOrdId(), order.getFixOrderId());
             eventCount = allEvents.size();
@@ -351,7 +383,7 @@ public class OrderController {
                 .accountNumber(account != null ? account.getAccountNumber() : null)
                 .accountType(account != null ? account.getAccountType() : null)
                 .primaryOrderClOrdId(order.getPrimaryOrderClOrdId())
-                .fixOrderId(fixOrderId)
+                .fixOrderId(finalFixOrderId)
                 .fixClOrdId(order.getFixClOrdId())
                 .fixOrigClOrdId(order.getFixOrigClOrdId())
                 .symbol(order.getSymbol())
