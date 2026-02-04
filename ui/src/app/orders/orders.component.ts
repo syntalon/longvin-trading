@@ -69,13 +69,12 @@ export class OrdersComponent implements OnInit {
   constructor(private orderService: OrderService) {}
 
   ngOnInit() {
-    // Set default date range to current day (last 24 hours)
+    // Set default start date to 24 hours ago, end date is empty (backend will use "now")
     const now = new Date();
     const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     
-    // Format as ISO string for backend (YYYY-MM-DDTHH:mm:ss)
-    this.endDate = this.formatDateForInput(now);
     this.startDate = this.formatDateForInput(yesterday);
+    this.endDate = ''; // Empty - backend will use current time
     
     this.searchOrders();
   }
@@ -167,11 +166,11 @@ export class OrdersComponent implements OnInit {
     this.execType = '';
     this.isCopyOrder = null;
     
-    // Reset to default date range (current day)
+    // Reset to default: start date 24 hours ago, end date empty (backend uses "now")
     const now = new Date();
     const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    this.endDate = this.formatDateForInput(now);
     this.startDate = this.formatDateForInput(yesterday);
+    this.endDate = ''; // Empty - backend will use current time
     
     this.searchParams.page = 0;
     this.searchOrders();

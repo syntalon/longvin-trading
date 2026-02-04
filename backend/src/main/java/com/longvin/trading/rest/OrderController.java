@@ -125,8 +125,9 @@ public class OrderController {
             } else {
                 // Default: get orders from current day (last 24 hours)
                 // If startDate/endDate are provided, use them; otherwise default to current day
-                LocalDateTime end = endDate != null ? LocalDateTime.parse(endDate) : LocalDateTime.now();
-                LocalDateTime start = startDate != null ? LocalDateTime.parse(startDate) : end.minusDays(1);
+                // endDate null/empty means "now" - always use current time for end date if not specified
+                LocalDateTime end = (endDate != null && !endDate.isBlank()) ? LocalDateTime.parse(endDate) : LocalDateTime.now();
+                LocalDateTime start = (startDate != null && !startDate.isBlank()) ? LocalDateTime.parse(startDate) : end.minusDays(1);
                 ordersPage = orderRepository.findByCreatedAtBetween(start, end, pageable);
             }
             
@@ -134,10 +135,11 @@ public class OrderController {
             LocalDateTime filterStart;
             LocalDateTime filterEnd;
             
-            if (startDate != null || endDate != null) {
+            // endDate null/empty means "now" - always use current time for end date if not specified
+            if (startDate != null && !startDate.isBlank() || endDate != null && !endDate.isBlank()) {
                 // Use provided date filters
-                filterEnd = endDate != null ? LocalDateTime.parse(endDate) : LocalDateTime.now();
-                filterStart = startDate != null ? LocalDateTime.parse(startDate) : filterEnd.minusDays(1);
+                filterEnd = (endDate != null && !endDate.isBlank()) ? LocalDateTime.parse(endDate) : LocalDateTime.now();
+                filterStart = (startDate != null && !startDate.isBlank()) ? LocalDateTime.parse(startDate) : filterEnd.minusDays(1);
             } else {
                 // Default: current day (last 24 hours)
                 filterEnd = LocalDateTime.now();
