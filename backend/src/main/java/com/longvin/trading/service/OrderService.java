@@ -214,11 +214,14 @@ public class OrderService {
         // Save event directly (event-driven: events can exist independently of orders)
         event = orderEventRepository.save(event);
         
-        // For shadow account orders, we don't update the order - only create events
-        // The order was already created when the message was sent, and we don't want to modify it
-        // Events are linked via ClOrdID, so they can be queried together without updating the order
-        // Only link event to order if it's a primary account order (for backward compatibility)
-        if (order != null && order.getAccount() != null && order.getAccount().getAccountType() == AccountType.PRIMARY) {
+        // Optionally link event to order if order exists (for convenience, not required)
+        // Events are primarily queried by ClOrdID, not by order relationship
+        // This linking is optional and doesn't create a dependency - events can exist without orders
+        if (order != null) {
+            // Set the order reference on the event (optional, for convenience queries)
+            event.setOrder(order);
+            orderEventRepository.save(event);
+            // Also update the order's events collection (optional, for convenience)
             order.addEvent(event);
             orderRepository.save(order);
         }
