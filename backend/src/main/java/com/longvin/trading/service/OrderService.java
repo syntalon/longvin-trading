@@ -211,17 +211,15 @@ public class OrderService {
                 .sessionId(sessionID != null ? sessionID.toString() : null)
                 .build();
         
-        // Save event directly (event-driven: events can exist independently of orders)
+        // Save event once (event-driven: events can exist independently of orders)
+        // The order link is already set in the builder if order != null
         event = orderEventRepository.save(event);
         
-        // Optionally link event to order if order exists (for convenience, not required)
+        // Optionally update order's events collection if order exists (for convenience, not required)
         // Events are primarily queried by ClOrdID, not by order relationship
         // This linking is optional and doesn't create a dependency - events can exist without orders
         if (order != null) {
-            // Set the order reference on the event (optional, for convenience queries)
-            event.setOrder(order);
-            orderEventRepository.save(event);
-            // Also update the order's events collection (optional, for convenience)
+            // Update the order's events collection (optional, for convenience queries)
             order.addEvent(event);
             orderRepository.save(order);
         }

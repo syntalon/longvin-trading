@@ -68,6 +68,34 @@ public interface OrderEventRepository extends JpaRepository<OrderEvent, UUID> {
     List<OrderEvent> findByClOrdIdOrOrigClOrdIdOrderByEventTimeDesc(@Param("clOrdId") String clOrdId);
     
     /**
+     * Find all events for an order by ClOrdID, OrigClOrdID, or fixOrderId.
+     * This handles cases where ExecutionReports use OrderID as ClOrdID instead of the original COPY- prefix.
+     * Used to find all events related to an order, including:
+     * - Events with matching ClOrdID
+     * - Replace events with temporary ClOrdIDs (matching OrigClOrdID)
+     * - Events where ClOrdID is just the OrderID (matching fixOrderId)
+     */
+    @Query("SELECT DISTINCT e FROM OrderEvent e WHERE " +
+           "e.fixClOrdId = :clOrdId OR e.fixOrigClOrdId = :clOrdId OR " +
+           "(:orderId IS NOT NULL AND e.fixOrderId = :orderId) " +
+           "ORDER BY e.eventTime ASC")
+    List<OrderEvent> findByClOrdIdOrOrigClOrdIdOrFixOrderIdOrderByEventTimeAsc(
+            @Param("clOrdId") String clOrdId, 
+            @Param("orderId") String orderId);
+    
+    /**
+     * Find all events for an order by ClOrdID, OrigClOrdID, or fixOrderId, ordered by event time descending.
+     * Used to get the most recent event for an order.
+     */
+    @Query("SELECT DISTINCT e FROM OrderEvent e WHERE " +
+           "e.fixClOrdId = :clOrdId OR e.fixOrigClOrdId = :clOrdId OR " +
+           "(:orderId IS NOT NULL AND e.fixOrderId = :orderId) " +
+           "ORDER BY e.eventTime DESC")
+    List<OrderEvent> findByClOrdIdOrOrigClOrdIdOrFixOrderIdOrderByEventTimeDesc(
+            @Param("clOrdId") String clOrdId, 
+            @Param("orderId") String orderId);
+    
+    /**
      * Find event by FIX ExecID.
      */
     Optional<OrderEvent> findByFixExecId(String fixExecId);

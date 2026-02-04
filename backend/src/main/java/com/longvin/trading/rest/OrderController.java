@@ -233,9 +233,12 @@ public class OrderController {
         List<OrderEvent> events;
         
         if (fixClOrdId != null && !fixClOrdId.isBlank()) {
-            // Get events by ClOrdID or OrigClOrdID (includes replace events with temporary ClOrdIDs)
-            // This ensures we get all events related to an order, even if replace used a temporary ClOrdID
-            events = orderEventRepository.findByClOrdIdOrOrigClOrdIdOrderByEventTimeAsc(fixClOrdId);
+            // Get events by ClOrdID, OrigClOrdID, or fixOrderId
+            // This ensures we get all events related to an order, including:
+            // - Replace events with temporary ClOrdIDs
+            // - Events where ExecutionReport uses OrderID as ClOrdID instead of COPY- prefix
+            // Note: We pass fixClOrdId as both clOrdId and orderId params to catch all cases
+            events = orderEventRepository.findByClOrdIdOrOrigClOrdIdOrFixOrderIdOrderByEventTimeAsc(fixClOrdId, fixClOrdId);
         } else if (orderId != null) {
             // Get events by order ID
             Optional<Order> orderOpt = orderRepository.findById(orderId);
@@ -243,9 +246,11 @@ public class OrderController {
                 return ResponseEntity.notFound().build();
             }
             Order order = orderOpt.get();
-            // If order has ClOrdID, also include events by ClOrdID/OrigClOrdID to catch unlinked events
+            // If order has ClOrdID, query by ClOrdID/OrigClOrdID/fixOrderId to catch all related events
+            // This includes events where ExecutionReport uses OrderID as ClOrdID
             if (order.getFixClOrdId() != null) {
-                events = orderEventRepository.findByClOrdIdOrOrigClOrdIdOrderByEventTimeAsc(order.getFixClOrdId());
+                events = orderEventRepository.findByClOrdIdOrOrigClOrdIdOrFixOrderIdOrderByEventTimeAsc(
+                        order.getFixClOrdId(), order.getFixOrderId());
             } else {
                 events = orderEventRepository.findByOrderOrderByEventTimeAsc(order);
             }
@@ -302,12 +307,15 @@ public class OrderController {
         
         // Get the latest event for this order to get the current status
         // Events have the final order status from ExecutionReports
-        // Query events by ClOrdID or OrigClOrdID to include replace events with temporary ClOrdIDs
+        // Query events by ClOrdID, OrigClOrdID, or fixOrderId to include:
+        // - Replace events with temporary ClOrdIDs
+        // - Events where ExecutionReport uses OrderID as ClOrdID instead of COPY- prefix
         OrderEvent latestEvent = null;
         if (order.getFixClOrdId() != null) {
-            // Find events that match this ClOrdID or have it as OrigClOrdID
-            // This includes replace events with temporary ClOrdIDs (e.g., COPY-XXX-YYY-R{timestamp})
-            List<OrderEvent> events = orderEventRepository.findByClOrdIdOrOrigClOrdIdOrderByEventTimeDesc(order.getFixClOrdId());
+            // Find events that match this ClOrdID, have it as OrigClOrdID, or have matching fixOrderId
+            // This handles cases where DAS Trader sends ExecutionReports with OrderID as ClOrdID
+            List<OrderEvent> events = orderEventRepository.findByClOrdIdOrOrigClOrdIdOrFixOrderIdOrderByEventTimeDesc(
+                    order.getFixClOrdId(), order.getFixOrderId());
             if (!events.isEmpty()) {
                 // First event is the most recent (DESC order)
                 latestEvent = events.get(0);
@@ -328,11 +336,12 @@ public class OrderController {
                 ? latestEvent.getFixOrderId() 
                 : order.getFixOrderId();
         
-        // Count events by ClOrdID or OrigClOrdID (events can exist independently of orders)
-        // This includes replace events with temporary ClOrdIDs
+        // Count events by ClOrdID, OrigClOrdID, or fixOrderId (events can exist independently of orders)
+        // This includes replace events with temporary ClOrdIDs and events where OrderID is used as ClOrdID
         int eventCount = 0;
         if (order.getFixClOrdId() != null) {
-            List<OrderEvent> allEvents = orderEventRepository.findByClOrdIdOrOrigClOrdIdOrderByEventTimeAsc(order.getFixClOrdId());
+            List<OrderEvent> allEvents = orderEventRepository.findByClOrdIdOrOrigClOrdIdOrFixOrderIdOrderByEventTimeAsc(
+                    order.getFixClOrdId(), order.getFixOrderId());
             eventCount = allEvents.size();
         }
         
