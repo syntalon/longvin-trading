@@ -6,6 +6,7 @@ import com.longvin.trading.fixSender.FixMessageSender;
 import com.longvin.trading.service.AccountCacheService;
 import com.longvin.trading.service.OrderService;
 import com.longvin.trading.service.ShortOrderProcessingService;
+import com.longvin.trading.util.QuoteReqIdMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -23,7 +24,7 @@ import java.util.Optional;
  * It contains the offer price and size for the requested stock.
  * 
  * For Type 0 routes:
- * 1. FillOrderHandler sends Short Locate Quote Request (3.11) with QuoteReqID format: QL_{shadowAccount}_{primaryClOrdId}_{timestamp}
+ * 1. FillOrderHandler sends Short Locate Quote Request (3.11) with a short QuoteReqID (<=39 chars per DAS).
  * 2. This handler receives Short Locate Quote Response (3.12)
  * 3. This handler sends locate order (3.14) to the shadow account
  * 4. ExecutionReport (3.5) received → Route 0 locate copy completed
@@ -59,35 +60,44 @@ public class LocateResponseHandler implements ExecutionReportHandler {
         log.info("Received Short Locate Quote Response (MsgType=S, section 3.12): QuoteReqID={}, Symbol={}, OfferPx={}, OfferSize={}",
             quoteReqID, context.getSymbol(), context.getOfferPx(), context.getOfferSize());
 
-        // Parse QuoteReqID to extract shadow account info and route
-        // Format: QL_{shadowAccount}_{primaryClOrdId}_{route}_{timestamp}
-        // Note: Broker may append symbol (e.g., "DRMA") to the timestamp part, but our parsing
-        // only uses the first 4 parts, so this is fine.
+        // Resolve context: prefer lookup (short ID <=39 chars), fallback to embedded format
         String shadowAccount = null;
         String primaryClOrdId = null;
         String locateRoute = null;
-        if (quoteReqID != null && quoteReqID.startsWith("QL_")) {
+        var ctxOpt = QuoteReqIdMapper.lookupAndRemove(quoteReqID);
+        if (ctxOpt.isPresent()) {
+            var ctx = ctxOpt.get();
+            shadowAccount = ctx.shadowAccount();
+            primaryClOrdId = ctx.primaryClOrdId();
+            locateRoute = ctx.locateRoute();
+            log.info("Resolved QuoteReqID from mapping: shadowAccount={}, primaryClOrdId={}, route={}", 
+                    shadowAccount, primaryClOrdId, locateRoute);
+        } else if (quoteReqID != null && quoteReqID.startsWith("QL_")) {
             String[] parts = quoteReqID.split("_");
-            log.debug("Parsing QuoteReqID: original={}, parts.length={}, parts={}", 
+            log.debug("Parsing legacy QuoteReqID: original={}, parts.length={}, parts={}", 
                     quoteReqID, parts.length, String.join(", ", parts));
-            
-            if (parts.length >= 4) {
+            // Skip if this looks like short format (QL_{base36}_{4chars}) - mapping was lost
+            boolean looksLikeShortFormat = parts.length == 3 && parts[2].length() == 4 
+                    && parts[1].length() <= 12 && parts[1].matches("[a-z0-9]+");
+            if (looksLikeShortFormat) {
+                log.warn("QuoteReqID looks like short format but mapping not found (cache lost?): QuoteReqID={}", quoteReqID);
+            } else if (parts.length >= 4) {
+                // Legacy embedded format: QL_{shadowAccount}_{primaryClOrdId}_{route}_{timestamp}
                 shadowAccount = parts[1];
                 primaryClOrdId = parts[2];
                 locateRoute = parts[3];
-                log.info("Parsed QuoteReqID: shadowAccount={}, primaryClOrdId={}, route={}, originalQuoteReqID={}", 
-                        shadowAccount, primaryClOrdId, locateRoute, quoteReqID);
+                log.info("Parsed legacy QuoteReqID: shadowAccount={}, primaryClOrdId={}, route={}", 
+                        shadowAccount, primaryClOrdId, locateRoute);
             } else if (parts.length >= 3) {
-                // Fallback for old format without route
                 shadowAccount = parts[1];
                 primaryClOrdId = parts[2];
-                log.info("Parsed QuoteReqID (old format): shadowAccount={}, primaryClOrdId={}, originalQuoteReqID={}", 
-                        shadowAccount, primaryClOrdId, quoteReqID);
+                log.info("Parsed legacy QuoteReqID (no route): shadowAccount={}, primaryClOrdId={}", 
+                        shadowAccount, primaryClOrdId);
             } else {
                 log.warn("QuoteReqID format unexpected: QuoteReqID={}, parts.length={}", quoteReqID, parts.length);
             }
         } else {
-            log.warn("QuoteReqID does not start with 'QL_': QuoteReqID={}", quoteReqID);
+            log.warn("QuoteReqID not found in mapping and does not start with 'QL_': QuoteReqID={}", quoteReqID);
         }
         
         // Use ExDestination from context if available, otherwise use parsed route

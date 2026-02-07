@@ -50,6 +50,7 @@ COPY .mvn .mvn
 COPY ui/pom.xml ./ui/
 COPY backend/pom.xml ./backend/
 COPY simulator/pom.xml ./simulator/
+COPY das-gateway/pom.xml ./das-gateway/
 
 # Copy UI source files (needed for frontend-maven-plugin to run npm install)
 # The plugin will install Node/npm and run npm install, but we'll use pre-built dist

@@ -11,6 +11,7 @@ import com.longvin.trading.service.AccountCacheService;
 import com.longvin.trading.service.CopyRuleService;
 import com.longvin.trading.service.OrderService;
 import com.longvin.trading.service.RouteService;
+import com.longvin.trading.util.QuoteReqIdMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -305,18 +306,16 @@ public class FillOrderHandler implements ExecutionReportHandler {
      * Send Short Locate Quote Request (MsgType=R, section 3.11) to a shadow account.
      * This is used for Type 0 routes where we need to request a quote before sending the locate order.
      * 
-     * QuoteReqID format: QL_{shadowAccount}_{primaryClOrdId}_{route}_{timestamp}
-     * This format allows LocateResponseHandler to identify which shadow account to send the locate order to.
+     * QuoteReqID is limited to 39 chars by DAS FIX API (tag 131). We use a short ID with
+     * a mapping lookup instead of embedding shadowAccount/primaryClOrdId/route in the string.
      */
     private void sendShortLocateQuoteRequestForShadowAccount(ExecutionReportContext context, Account primaryAccount,
                                                              Account shadowAccount, String locateRoute, SessionID initiatorSessionID) {
         String shadowAccountNumber = shadowAccount.getAccountNumber();
         String primaryClOrdId = context.getClOrdID();
         
-        // Generate QuoteReqID in format: QL_{shadowAccount}_{primaryClOrdId}_{route}_{timestamp}
-        // This allows LocateResponseHandler to identify the shadow account and route
-        long timestamp = System.currentTimeMillis();
-        String quoteReqID = String.format("QL_%s_%s_%s_%d", shadowAccountNumber, primaryClOrdId, locateRoute, timestamp);
+        // Register context and get short QuoteReqID (<=39 chars) for DAS
+        String quoteReqID = QuoteReqIdMapper.registerAndGetShortId(shadowAccountNumber, primaryClOrdId, locateRoute);
         
         int qty = context.getOrderQty().intValue();
         
