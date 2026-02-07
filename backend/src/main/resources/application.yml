@@ -59,6 +59,9 @@ trading:
     # ET: no connection before start or after end (hours 0–23)
     trading-start-hour: ${TRADING_START_HOUR:4}
     trading-end-hour: ${TRADING_END_HOUR:20}
+    # Scheduler: pause initiator when outside hours to avoid logout loop
+    trading-hours-check-delay: ${TRADING_HOURS_CHECK_DELAY:15000}
+    trading-hours-check-interval: ${TRADING_HOURS_CHECK_INTERVAL:60000}
   accounts:
     # Enable/disable automatic account data initialization on startup
     # Creates: OPAL broker, OS111 DAS login ID, and accounts TRDAS83 and TROS107

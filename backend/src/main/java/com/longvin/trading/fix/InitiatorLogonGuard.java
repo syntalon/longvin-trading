@@ -45,22 +45,22 @@ public class InitiatorLogonGuard {
         this.scheduler = scheduler;
     }
 
-    public boolean isLogonAllowed(SessionID sessionID) {
+    /** Returns true if connection/logon is allowed (for scheduler; no session needed). */
+    public boolean isConnectionAllowed() {
         Instant now = Instant.now();
-        Instant allowedOverride = nextAllowedLogon.get();
-        if (now.isBefore(allowedOverride)) {
-            log.debug("Logon suppressed for session {} (server override) until {}", sessionID, getNextAllowedLogonFormatted());
+        if (now.isBefore(nextAllowedLogon.get())) {
             return false;
         }
-        ZonedDateTime nowEt = now.atZone(TRADING_ZONE);
-        int hour = nowEt.getHour();
-        boolean withinTradingWindow = hour >= tradingStartHour && hour < tradingEndHour;
-        if (!withinTradingWindow) {
-            log.debug("Logon suppressed for session {} (outside {}–{} ET) until {}", 
-                    sessionID, tradingStartHour, tradingEndHour, getNextAllowedLogonFormatted());
-            return false;
+        int hour = now.atZone(TRADING_ZONE).getHour();
+        return hour >= tradingStartHour && hour < tradingEndHour;
+    }
+
+    public boolean isLogonAllowed(SessionID sessionID) {
+        if (isConnectionAllowed()) {
+            return true;
         }
-        return true;
+        log.debug("Logon suppressed for session {} until {}", sessionID, getNextAllowedLogonFormatted());
+        return false;
     }
 
     public void markNotTradingDay(SessionID sessionID, String reason) {
