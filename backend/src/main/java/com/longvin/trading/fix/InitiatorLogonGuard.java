@@ -18,8 +18,10 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Guard that determines when the initiator session is allowed to attempt a logon.
- * This component only tracks state - it does not control the session lifecycle.
- * The actual pause/resume logic should be handled by the component that uses this guard.
+ * Enforces:
+ * - No connection before trading-start-hour (e.g. 4 AM ET)
+ * - No connection after trading-end-hour (e.g. 8 PM ET)
+ * - Server "not trading day" override via markNotTradingDay()
  */
 @Component
 public class InitiatorLogonGuard {
@@ -28,23 +30,37 @@ public class InitiatorLogonGuard {
     private static final ZoneId TRADING_ZONE = ZoneId.of("America/New_York");
 
     private final int resumeHour;
+    private final int tradingStartHour;
+    private final int tradingEndHour;
     private final ScheduledExecutorService scheduler;
     private final AtomicReference<Instant> nextAllowedLogon = new AtomicReference<>(Instant.EPOCH);
 
     public InitiatorLogonGuard(@Value("${trading.initiator.non-trading-resume-hour:6}") int resumeHour,
+                               @Value("${trading.initiator.trading-start-hour:4}") int tradingStartHour,
+                               @Value("${trading.initiator.trading-end-hour:20}") int tradingEndHour,
                                @Qualifier("initiatorLogonGuardScheduler") ScheduledExecutorService scheduler) {
         this.resumeHour = resumeHour;
+        this.tradingStartHour = tradingStartHour;
+        this.tradingEndHour = tradingEndHour;
         this.scheduler = scheduler;
     }
 
     public boolean isLogonAllowed(SessionID sessionID) {
         Instant now = Instant.now();
-        Instant allowed = nextAllowedLogon.get();
-        boolean permitted = !now.isBefore(allowed);
-        if (!permitted) {
-            log.debug("Logon suppressed for session {} until {}", sessionID, getNextAllowedLogonFormatted());
+        Instant allowedOverride = nextAllowedLogon.get();
+        if (now.isBefore(allowedOverride)) {
+            log.debug("Logon suppressed for session {} (server override) until {}", sessionID, getNextAllowedLogonFormatted());
+            return false;
         }
-        return permitted;
+        ZonedDateTime nowEt = now.atZone(TRADING_ZONE);
+        int hour = nowEt.getHour();
+        boolean withinTradingWindow = hour >= tradingStartHour && hour < tradingEndHour;
+        if (!withinTradingWindow) {
+            log.debug("Logon suppressed for session {} (outside {}–{} ET) until {}", 
+                    sessionID, tradingStartHour, tradingEndHour, getNextAllowedLogonFormatted());
+            return false;
+        }
+        return true;
     }
 
     public void markNotTradingDay(SessionID sessionID, String reason) {
@@ -89,10 +105,21 @@ public class InitiatorLogonGuard {
     }
 
     public Optional<ZonedDateTime> getNextAllowedLogon() {
-        Instant next = nextAllowedLogon.get();
-        if (next.equals(Instant.EPOCH)) {
-            return Optional.empty();
+        Instant override = nextAllowedLogon.get();
+        if (!override.equals(Instant.EPOCH)) {
+            return Optional.of(ZonedDateTime.ofInstant(override, TRADING_ZONE));
         }
-        return Optional.of(ZonedDateTime.ofInstant(next, TRADING_ZONE));
+        ZonedDateTime nowEt = ZonedDateTime.now(TRADING_ZONE);
+        int hour = nowEt.getHour();
+        if (hour >= tradingStartHour && hour < tradingEndHour) {
+            return Optional.empty(); // currently allowed
+        }
+        ZonedDateTime next;
+        if (hour < tradingStartHour) {
+            next = nowEt.toLocalDate().atStartOfDay(TRADING_ZONE).plusHours(tradingStartHour);
+        } else {
+            next = nowEt.toLocalDate().plusDays(1).atStartOfDay(TRADING_ZONE).plusHours(tradingStartHour);
+        }
+        return Optional.of(next);
     }
 }
