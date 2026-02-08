@@ -92,6 +92,13 @@ trading:
         holding-window: ${FIX_SHADOW2_HOLDING_WINDOW:PT2M}
         partial-cancel-window: ${FIX_SHADOW2_PARTIAL_CANCEL_WINDOW:PT20S}
     cl-ord-id-prefix: ${FIX_CL_ORD_ID_PREFIX:MIRROR-}
+
+azure:
+  servicebus:
+    enabled: ${AZURE_SERVICEBUS_ENABLED:true}
+    connection-string: ${AZURE_SERVICEBUS_CONNECTION_STRING:}
+    queue-name: ${AZURE_SERVICEBUS_QUEUE_NAME:}
+    max-concurrent-calls: ${AZURE_SERVICEBUS_MAX_CONCURRENT_CALLS:1}
 ---
 # Production profile configuration
 # This is the default profile for production use

@@ -7,10 +7,12 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+import com.longvin.dasgateway.servicebus.ServiceBusProperties;
+
 import java.time.Duration;
 
 @Component
-@EnableConfigurationProperties(CmdApiProperties.class)
+@EnableConfigurationProperties({CmdApiProperties.class, ServiceBusProperties.class})
 public class CmdStartup implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(CmdStartup.class);
