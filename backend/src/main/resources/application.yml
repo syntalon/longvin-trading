@@ -96,7 +96,7 @@ trading:
 azure:
   servicebus:
     enabled: ${AZURE_SERVICEBUS_ENABLED:true}
-    auth-mode: ${AZURE_SERVICEBUS_AUTH_MODE:connection-string}
+    auth-mode: ${AZURE_SERVICEBUS_AUTH_MODE:}
     connection-string: ${AZURE_SERVICEBUS_CONNECTION_STRING:}
     namespace: ${AZURE_SERVICEBUS_NAMESPACE:}
     queue-name: ${AZURE_SERVICEBUS_QUEUE_NAME:}
