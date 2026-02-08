@@ -158,6 +158,14 @@ logging:
     quickfix: ${LOG_LEVEL_QUICKFIX:INFO}
     quickfix.mina: ${LOG_LEVEL_QUICKFIX_MINA:WARN}
 
+azure:
+  servicebus:
+    enabled: ${AZURE_SERVICEBUS_ENABLED:true}
+    auth-mode: ${AZURE_SERVICEBUS_AUTH_MODE:managed-identity}
+    namespace: ${AZURE_SERVICEBUS_NAMESPACE:dev-eastus-servicebus-main.servicebus.windows.net}
+    queue-name: ${AZURE_SERVICEBUS_QUEUE_NAME:longvin}
+    connection-string: ${AZURE_SERVICEBUS_CONNECTION_STRING:}
+
 ---
 # Test profile configuration
 # Use this profile for testing with the simulator
