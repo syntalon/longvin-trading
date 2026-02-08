@@ -96,10 +96,12 @@ trading:
 azure:
   servicebus:
     enabled: ${AZURE_SERVICEBUS_ENABLED:true}
+    auth-mode: ${AZURE_SERVICEBUS_AUTH_MODE:connection-string}
     connection-string: ${AZURE_SERVICEBUS_CONNECTION_STRING:}
+    namespace: ${AZURE_SERVICEBUS_NAMESPACE:}
     queue-name: ${AZURE_SERVICEBUS_QUEUE_NAME:}
     max-concurrent-calls: ${AZURE_SERVICEBUS_MAX_CONCURRENT_CALLS:1}
----
+
 # Production profile configuration
 # This is the default profile for production use
 # Environment variables can override these values

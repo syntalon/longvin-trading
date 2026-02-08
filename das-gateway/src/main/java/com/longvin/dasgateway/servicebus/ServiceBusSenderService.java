@@ -1,5 +1,6 @@
 package com.longvin.dasgateway.servicebus;
 
+import com.azure.identity.DefaultAzureCredentialBuilder;
 import com.azure.messaging.servicebus.ServiceBusClientBuilder;
 import com.azure.messaging.servicebus.ServiceBusMessage;
 import com.azure.messaging.servicebus.ServiceBusSenderClient;
@@ -25,9 +26,6 @@ public class ServiceBusSenderService {
         if (!props.enabled()) {
             return;
         }
-        if (props.connectionString() == null || props.connectionString().isBlank()) {
-            throw new IllegalStateException("azure.servicebus.enabled=true but azure.servicebus.connection-string is empty. Provide AZURE_SERVICEBUS_CONNECTION_STRING at startup.");
-        }
         if (props.queueName() == null || props.queueName().isBlank()) {
             throw new IllegalStateException("azure.servicebus.enabled=true but azure.servicebus.queue-name is empty. Provide AZURE_SERVICEBUS_QUEUE_NAME at startup.");
         }
@@ -39,9 +37,24 @@ public class ServiceBusSenderService {
         if (sender != null) {
             return sender;
         }
-        log.info("Creating Service Bus sender. queue={}", props.queueName());
-        sender = new ServiceBusClientBuilder()
-                .connectionString(props.connectionString())
+
+        String authMode = props.authMode();
+        if (authMode == null || authMode.isBlank()) {
+            authMode = "connection-string";
+        }
+
+        log.info("Creating Service Bus sender. authMode={}, queue={}", authMode, props.queueName());
+        ServiceBusClientBuilder builder;
+        if ("managed-identity".equalsIgnoreCase(authMode) || "aad".equalsIgnoreCase(authMode)) {
+            builder = new ServiceBusClientBuilder()
+                    .fullyQualifiedNamespace(props.namespace())
+                    .credential(new DefaultAzureCredentialBuilder().build());
+        } else {
+            builder = new ServiceBusClientBuilder()
+                    .connectionString(props.connectionString());
+        }
+
+        sender = builder
                 .sender()
                 .queueName(props.queueName())
                 .buildClient();

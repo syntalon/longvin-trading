@@ -1,5 +1,6 @@
 package com.longvin.trading.servicebus;
 
+import com.azure.identity.DefaultAzureCredentialBuilder;
 import com.azure.messaging.servicebus.ServiceBusClientBuilder;
 import com.azure.messaging.servicebus.ServiceBusErrorContext;
 import com.azure.messaging.servicebus.ServiceBusProcessorClient;
@@ -12,10 +13,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 @Component
 @EnableConfigurationProperties(ServiceBusConsumerProperties.class)
+@Order(10)
 public class ServiceBusQueueConsumer implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(ServiceBusQueueConsumer.class);
@@ -35,8 +38,22 @@ public class ServiceBusQueueConsumer implements ApplicationRunner {
             return;
         }
 
-        ServiceBusProcessorClient p = new ServiceBusClientBuilder()
-                .connectionString(props.connectionString())
+        String authMode = props.authMode();
+        if (authMode == null || authMode.isBlank()) {
+            authMode = "connection-string";
+        }
+
+        ServiceBusClientBuilder builder;
+        if ("managed-identity".equalsIgnoreCase(authMode) || "aad".equalsIgnoreCase(authMode)) {
+            builder = new ServiceBusClientBuilder()
+                    .fullyQualifiedNamespace(props.namespace())
+                    .credential(new DefaultAzureCredentialBuilder().build());
+        } else {
+            builder = new ServiceBusClientBuilder()
+                    .connectionString(props.connectionString());
+        }
+
+        ServiceBusProcessorClient p = builder
                 .processor()
                 .queueName(props.queueName())
                 .maxConcurrentCalls(Math.max(1, props.maxConcurrentCalls()))
@@ -47,7 +64,7 @@ public class ServiceBusQueueConsumer implements ApplicationRunner {
 
         this.processor = p;
         p.start();
-        log.info("Azure Service Bus consumer started. queue={}", props.queueName());
+        log.info("Azure Service Bus consumer started. authMode={}, queue={}", authMode, props.queueName());
     }
 
     private void onMessage(ServiceBusReceivedMessageContext context) {
